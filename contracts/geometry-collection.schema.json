@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tor API Geometry Collection",
+  "description": "Geometry in Torquetum project space and metres, preserving branch paths and item positions.",
+  "type": "object",
+  "required": ["schemaVersion", "units", "space", "branches"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": "0.0" },
+    "units": { "const": "m" },
+    "space": { "const": "project" },
+    "branches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "items"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/nonnegativeInt32" }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/geometry" }]
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "nonnegativeInt32": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
+    "vec3": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": { "type": "number" }
+    },
+    "interval": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": { "type": "number" }
+    },
+    "planeFrame": {
+      "type": "object",
+      "required": ["origin", "normal", "direction"],
+      "properties": {
+        "origin": { "$ref": "#/$defs/vec3" },
+        "normal": { "$ref": "#/$defs/vec3" },
+        "direction": { "$ref": "#/$defs/vec3" }
+      }
+    },
+    "geometry": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string" }
+      },
+      "oneOf": [
+        {
+          "required": ["position"],
+          "properties": {
+            "kind": { "const": "point" },
+            "position": { "$ref": "#/$defs/vec3" }
+          }
+        },
+        {
+          "required": ["start", "end"],
+          "properties": {
+            "kind": { "const": "line" },
+            "start": { "$ref": "#/$defs/vec3" },
+            "end": { "$ref": "#/$defs/vec3" },
+            "domain": { "$ref": "#/$defs/interval" }
+          }
+        },
+        {
+          "required": ["points", "closed"],
+          "properties": {
+            "kind": { "const": "polyline" },
+            "points": {
+              "type": "array",
+              "minItems": 2,
+              "items": { "$ref": "#/$defs/vec3" }
+            },
+            "closed": { "type": "boolean" },
+            "domain": { "$ref": "#/$defs/interval" }
+          }
+        },
+        {
+          "$ref": "#/$defs/planeFrame",
+          "properties": { "kind": { "const": "plane" } }
+        },
+        {
+          "required": ["plane", "x", "y", "z"],
+          "properties": {
+            "kind": { "const": "box" },
+            "plane": { "$ref": "#/$defs/planeFrame", "unevaluatedProperties": false },
+            "x": { "$ref": "#/$defs/interval" },
+            "y": { "$ref": "#/$defs/interval" },
+            "z": { "$ref": "#/$defs/interval" }
+          }
+        },
+        {
+          "required": ["positions", "triangles"],
+          "properties": {
+            "kind": { "const": "triangle-mesh" },
+            "positions": {
+              "type": "array",
+              "minItems": 3,
+              "items": { "$ref": "#/$defs/vec3" }
+            },
+            "triangles": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "array",
+                "minItems": 3,
+                "maxItems": 3,
+                "items": { "$ref": "#/$defs/nonnegativeInt32" }
+              }
+            }
+          }
+        },
+        {
+          "required": ["shapeType", "step"],
+          "properties": {
+            "kind": { "const": "brep-step" },
+            "shapeType": { "enum": ["face", "shell", "solid"] },
+            "step": { "type": "string", "pattern": "^\\s*ISO-10303-21;" }
+          }
+        }
+      ],
+      "unevaluatedProperties": false
+    }
+  }
+}

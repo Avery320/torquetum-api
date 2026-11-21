@@ -1,0 +1,278 @@
+openapi: 3.1.1
+info:
+  title: Torquetum API
+  version: "0.0"
+  description: |-
+    Local Torquetum pairing, Project status and Asterism geometry exchange.
+    The pairing code supplies the actual endpoint. Responses use Cache-Control no-store.
+    POST and PUT accept uncompressed UTF-8 JSON.
+servers:
+  - url: "http://127.0.0.1:{port}"
+    variables:
+      port:
+        default: "44555"
+        description: Port from the pairing code.
+security:
+  - ProjectGrant: []
+paths:
+  /v0.0/pair:
+    post:
+      operationId: pair
+      summary: Redeem a one-use Project invitation
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invite, clientName]
+              additionalProperties: false
+              properties:
+                invite: { type: string }
+                clientName:
+                  type: string
+                  minLength: 1
+                  maxLength: 80
+                  description: At most 80 UTF-16 code units with content after trimming.
+      responses:
+        "200":
+          description: Grant for one Project instance
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Project"
+                  - type: object
+                    required: [grantId, accessToken, expiresAt]
+                    properties:
+                      grantId: { type: string, format: uuid }
+                      accessToken: { type: string }
+                      expiresAt: { type: string, format: date-time }
+        "401": { $ref: "#/components/responses/Error", description: Invitation invalid or consumed }
+        "409": { $ref: "#/components/responses/Error", description: Project busy }
+        default: { $ref: "#/components/responses/Error" }
+  /v0.0/project:
+    get:
+      operationId: getProject
+      summary: Get Project identity, access and exchange readiness
+      responses:
+        "200":
+          description: Current Project status
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Project" }
+        "401": { $ref: "#/components/responses/Error", description: Pairing required }
+        default: { $ref: "#/components/responses/Error" }
+  /v0.0/asterism/ports:
+    get:
+      operationId: listExchangeNodes
+      summary: List addressable Asterism inputs and outputs
+      responses:
+        "200":
+          description: Exchange node IDs and current Input revisions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      oneOf:
+                        - type: object
+                          required: [id, direction, etag]
+                          properties:
+                            id: { $ref: "#/components/schemas/NodeId" }
+                            direction: { const: input }
+                            etag: { $ref: "#/components/schemas/StrongTag" }
+                        - type: object
+                          required: [id, direction]
+                          properties:
+                            id: { $ref: "#/components/schemas/NodeId" }
+                            direction: { const: output }
+        "409": { $ref: "#/components/responses/Error", description: Graph unavailable or Project busy }
+        default: { $ref: "#/components/responses/Error" }
+  /v0.0/asterism/inputs/{id}:
+    put:
+      operationId: writeGeometry
+      summary: Replace the geometry tree at an Input
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+        - name: X-Tor-Request-Id
+          in: header
+          required: true
+          schema: { type: string, format: uuid }
+        - name: If-Match
+          in: header
+          required: true
+          schema: { $ref: "#/components/schemas/StrongTag" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "./geometry-collection.schema.json" }
+      responses:
+        "202":
+          description: Write admitted or an admitted request replayed
+          headers:
+            Location:
+              description: Relative receipt path on the paired endpoint.
+              schema: { type: string, pattern: "^/v0[.]0/requests/[a-f0-9-]+$" }
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId]
+                properties:
+                  requestId: { type: string, format: uuid }
+        "403": { $ref: "#/components/responses/Error", description: Read-only grant or Project }
+        "404": { $ref: "#/components/responses/Error", description: Input unavailable }
+        "412": { $ref: "#/components/responses/Error", description: Stale Input revision }
+        "428": { $ref: "#/components/responses/Error", description: Input revision required }
+        default: { $ref: "#/components/responses/Error" }
+  /v0.0/requests/{requestId}:
+    get:
+      operationId: getWriteReceipt
+      summary: Check an admitted write using its original grant
+      parameters:
+        - name: requestId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Pending, committed or rejected receipt
+          headers:
+            Retry-After: { $ref: "#/components/headers/RetryAfter" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Receipt" }
+        "404": { $ref: "#/components/responses/Error", description: Unknown request for this grant }
+        default: { $ref: "#/components/responses/Error" }
+  /v0.0/asterism/outputs/{id}:
+    get:
+      operationId: readGeometry
+      summary: Read a completed Asterism Output
+      parameters:
+        - $ref: "#/components/parameters/NodeId"
+        - name: X-Tor-Request-Id
+          in: header
+          description: A committed Input write from this grant which the Output depends on.
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Completed geometry tree
+          headers:
+            ETag:
+              description: Input revision for a successful read qualified by a write request ID.
+              schema: { $ref: "#/components/schemas/StrongTag" }
+          content:
+            application/json:
+              schema: { $ref: "./geometry-collection.schema.json" }
+        "404": { $ref: "#/components/responses/Error", description: Output or qualified request unavailable }
+        "409": { $ref: "#/components/responses/Error", description: Output not ready or requested revision unavailable }
+        default: { $ref: "#/components/responses/Error" }
+components:
+  securitySchemes:
+    ProjectGrant:
+      type: http
+      scheme: bearer
+  parameters:
+    NodeId:
+      name: id
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/NodeId" }
+  headers:
+    RetryAfter:
+      description: Seconds until the next receipt check or retry.
+      schema: { type: integer, minimum: 0 }
+  responses:
+    Error:
+      description: Request failed with a Tor API error
+      headers:
+        Retry-After: { $ref: "#/components/headers/RetryAfter" }
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: { $ref: "#/components/schemas/ErrorDetail" }
+  schemas:
+    NodeId:
+      type: string
+      pattern: "^[A-Za-z0-9_-]+$"
+    StrongTag:
+      type: string
+      pattern: '^"[!#-~]*"$'
+    Project:
+      type: object
+      required: [projectId, projectName, instanceId, canRead, canWrite, kinds, mediaTypes, limits]
+      properties:
+        projectId: { type: string, minLength: 1 }
+        projectName: { type: string, minLength: 1 }
+        instanceId: { type: string, format: uuid }
+        canRead: { type: boolean }
+        canWrite: { type: boolean }
+        availabilityReason:
+          enum: [PROJECT_NOT_RUNNING, PROJECT_SYNC_PENDING, PROJECT_BUSY, READ_ONLY]
+        kinds:
+          type: array
+          items: { type: string }
+        mediaTypes:
+          const: [application/json]
+        limits:
+          type: object
+          required: [maxBodyBytes, maxBranches, maxPathDepth, maxItems, maxVertices, maxTriangles]
+          properties:
+            maxBodyBytes: { type: integer, minimum: 1 }
+            maxBranches: { type: integer, minimum: 1 }
+            maxPathDepth: { type: integer, minimum: 1 }
+            maxItems: { type: integer, minimum: 1 }
+            maxVertices: { type: integer, minimum: 1 }
+            maxTriangles: { type: integer, minimum: 1 }
+    Receipt:
+      type: object
+      required: [requestId, state]
+      properties:
+        requestId: { type: string, format: uuid }
+      oneOf:
+        - properties:
+            state: { const: pending }
+          not: { required: [result] }
+        - required: [result]
+          properties:
+            state: { const: committed }
+            result:
+              type: object
+              required: [httpStatus, id, etag]
+              properties:
+                httpStatus: { const: 200 }
+                id: { $ref: "#/components/schemas/NodeId" }
+                etag: { $ref: "#/components/schemas/StrongTag" }
+        - required: [result]
+          properties:
+            state: { const: rejected }
+            result:
+              type: object
+              required: [httpStatus, error]
+              properties:
+                httpStatus: { type: integer, minimum: 400, maximum: 599 }
+                error: { $ref: "#/components/schemas/ErrorDetail" }
+    ErrorDetail:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string, format: uuid }
+        reason: { type: string }
+        field: { type: string }
+        path:
+          type: array
+          items: { type: integer, minimum: 0 }
+        itemIndex: { type: integer, minimum: 0 }

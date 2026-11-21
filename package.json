@@ -1,0 +1,23 @@
+{
+  "name": "@torquetum/api",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./geometry-collection.schema.json": "./contracts/geometry-collection.schema.json"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run tests"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "0.0",
+  "units": "m",
+  "space": "project",
+  "branches": [
+    {
+      "path": [0],
+      "items": [
+        { "kind": "point", "position": [1, 2, 3] },
+        null,
+        { "kind": "line", "start": [0, 0, 0], "end": [1, 0, 0], "domain": [0, 5] }
+      ]
+    },
+    { "path": [0, 4], "items": [] },
+    {
+      "path": [3, 0, 7],
+      "items": [
+        { "kind": "polyline", "points": [[0, 0, 0], [1, 0, 0], [0, 1, 0]], "closed": true },
+        { "kind": "plane", "origin": [2, 0, 0], "normal": [0, 0, 1], "direction": [1, 0, 0] },
+        {
+          "kind": "box",
+          "plane": { "origin": [0, 0, 0], "normal": [0, 0, 1], "direction": [1, 0, 0] },
+          "x": [-1, 1],
+          "y": [0, 3],
+          "z": [0, 2]
+        },
+        {
+          "kind": "triangle-mesh",
+          "positions": [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+          "triangles": [[0, 1, 2]]
+        }
+      ]
+    }
+  ]
+}
