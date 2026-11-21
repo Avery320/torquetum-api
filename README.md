@@ -4,6 +4,17 @@
 
 Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾何交換。本儲存庫包含 V0.0 的 OpenAPI 契約、Geometry Collection 的 JSON Schema，以及 Torquetum 用來提供 API 的 Rust 與 TypeScript 實作。外部程式透過 HTTP 連線至執行中的 Torquetum 專案。 [OpenAPI 契約](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Grasshopper 外掛 Alidade](https://github.com/Avery320/alidade)
 
+## API 一覽
+
+| 方法 | 路徑 | 用途 |
+| --- | --- | --- |
+| `POST` | `/v0.0/pair` | 用一次性配對邀請取得專案的 `accessToken`。 |
+| `GET` | `/v0.0/project` | 查詢專案身分、讀寫權限、交換就緒狀態與傳輸上限。 |
+| `GET` | `/v0.0/asterism/ports` | 列出可交換資料的 Geometry Input 和 Geometry Output ID，以及各 Input 的 ETag。 |
+| `PUT` | `/v0.0/asterism/inputs/{id}` | 替換指定 Input 的整棵幾何資料樹。受理後回傳回執位置。 |
+| `GET` | `/v0.0/requests/{requestId}` | 使用原寫入授權，查詢回執為 `pending`、`committed` 或 `rejected`。 |
+| `GET` | `/v0.0/asterism/outputs/{id}` | 讀取指定 Output 已求解的幾何資料樹。可帶 `X-Tor-Request-Id` 讀取特定寫入的結果。 |
+
 ## 快速開始
 
 收發幾何需要在用戶端同一台電腦上執行支援 V0.0 的 Torquetum Desktop 或本機 `torquetum-server`。若有 Torquetum 主儲存庫的存取權，可依開發環境說明初始化 submodule 並安裝相依套件，再執行 `pnpm --filter @torquetum/studio build` 和 `cargo run -p torquetum-server`。用瀏覽器開啟伺服器印出的網址。 [Torquetum 開發環境](https://github.com/Avery320/torquetum#開發環境)

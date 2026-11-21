@@ -4,6 +4,17 @@
 
 Local HTTP API for Torquetum Project access and Asterism geometry exchange. This repository contains the [OpenAPI V0.0 contract](contracts/openapi.yaml), [Geometry Collection schema](contracts/geometry-collection.schema.json) and the Rust and TypeScript code used by Torquetum to serve the API. Native clients connect to a running Torquetum Project over HTTP. [Alidade](https://github.com/Avery320/alidade) is the Grasshopper connector.
 
+## API overview
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v0.0/pair` | Redeem a one-use pairing invitation for a Project `accessToken`. |
+| `GET` | `/v0.0/project` | Get the Project identity, read and write permissions, exchange readiness, and transfer limits. |
+| `GET` | `/v0.0/asterism/ports` | List addressable Geometry Input and Geometry Output IDs and the ETag of each Input. |
+| `PUT` | `/v0.0/asterism/inputs/{id}` | Replace the full geometry tree at an Input. The response to an accepted write includes the receipt location. |
+| `GET` | `/v0.0/requests/{requestId}` | Use the original write grant to check whether the receipt is `pending`, `committed`, or `rejected`. |
+| `GET` | `/v0.0/asterism/outputs/{id}` | Read the completed geometry tree at an Output. Include `X-Tor-Request-Id` to read the result for a specific write. |
+
 ## Quick start
 
 Run a V0.0-capable Torquetum Desktop app or local `torquetum-server` on the same computer as the client. If you have access to the Torquetum source repository, follow its development setup to initialize the submodule and install dependencies. Build Studio with `pnpm --filter @torquetum/studio build`, run `cargo run -p torquetum-server` and open the URL printed by the server. [Torquetum development setup](https://github.com/Avery320/torquetum#開發環境)
