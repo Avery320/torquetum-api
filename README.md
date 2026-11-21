@@ -1,58 +1,60 @@
 # Torquetum API
 
-Local HTTP API for Torquetum Project access and Asterism geometry exchange. This repository contains the [OpenAPI V0.0 contract](contracts/openapi.yaml), [Geometry Collection schema](contracts/geometry-collection.schema.json) and the Rust and TypeScript code used by Torquetum to serve the API. Native clients connect to a running Torquetum Project over HTTP. [Alidade](https://github.com/Avery320/alidade) is the Grasshopper connector.
+繁體中文 · [English](README.en.md)
 
-## Quick start
+Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾何交換。本儲存庫包含 V0.0 的 OpenAPI 契約、Geometry Collection 的 JSON Schema，以及 Torquetum 用來提供 API 的 Rust 與 TypeScript 實作。外部程式透過 HTTP 連線至執行中的 Torquetum 專案。 [OpenAPI 契約](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Grasshopper 外掛 Alidade](https://github.com/Avery320/alidade)
 
-Run Torquetum Desktop or a local `torquetum-server` with V0.0 support on the same computer as the client. With access to the Torquetum source checkout, build Studio with `pnpm --filter @torquetum/studio build`, run `cargo run -p torquetum-server` and open the URL printed by the server. The first API import comes from Torquetum commit `942ddd33307966e8b6cbe1b2ad8ed5856c454feb`.
+## 快速開始
 
-1. Open a standalone Project in Studio. In Asterism, wire a **Geometry Input** directly to a **Geometry Output**. Enable both and set both **ID** fields to `fixture`.
-2. Copy the pairing code from **Project Settings → External Connections** for that Project.
-3. Run the [Python example](examples/python/asterism-exchange-smoke.py) from the cloned API repository and paste the code at its prompt.
+在同一台電腦上啟動支援 V0.0 的 Torquetum Desktop 或本機 `torquetum-server`。若從 Torquetum 原始碼啟動，先安裝其相依套件，再執行 `pnpm --filter @torquetum/studio build` 和 `cargo run -p torquetum-server`，開啟伺服器印出的網址。此 API 最初從 Torquetum 提交 `942ddd33307966e8b6cbe1b2ad8ed5856c454feb` 匯出。
+
+1. 在 Studio 開啟獨立 Project。在 Asterism 將 **Geometry Input** 直接接到 **Geometry Output**，啟用兩個節點並將 **ID** 都設為 `fixture`。
+2. 在該專案的 **Project Settings → External Connections** 複製配對碼。
+3. 在 clone 下來的 API 目錄執行以下 Python 範例，並在提示出現時貼上配對碼。 [Python 範例](examples/python/asterism-exchange-smoke.py)
 
    ```sh
    python3 examples/python/asterism-exchange-smoke.py fixture fixture
    ```
 
-The script uses the Python standard library. It replaces the test Input tree twice, checks the write receipts, reads back the exact revisions and verifies retry and stale-version handling. Use a dedicated test Input for this example.
+範例只使用 Python 標準函式庫。它會替換測試 Input 的整棵資料樹兩次，核對寫入回執與指定版本的讀回結果，並驗證重送及過期版本的處理。請使用專供驗收的 Input。
 
-## Connect a client
+## 客戶端配對
 
-The pairing code starts with `TORAPI.` and contains unpadded base64url UTF-8 JSON with `endpoint` and `invite`. Send `{invite, clientName}` to `POST /v0.0/pair` at that endpoint and use the returned `accessToken` as a Bearer token. `GET /v0.0/project` reports the current Project, access, readiness and transfer limits. An invitation is usable once. Copy a fresh code when an invitation expires or a grant becomes unavailable.
+配對碼以 `TORAPI.` 開頭，後面是用無填充 base64url 編碼的 UTF-8 JSON，包含 `endpoint` 和 `invite`。向該端點的 `POST /v0.0/pair` 送出含 `invite` 與 `clientName` 的 JSON，將回傳的 `accessToken` 用作 Bearer token。`GET /v0.0/project` 可查詢目前專案、權限、交換就緒狀態及傳輸上限。配對碼限用一次。配對碼到期或授權失效時，從專案設定複製新碼。
 
-Connect directly to `http://127.0.0.1:<port>` with redirects, proxies and cookies disabled. The host checks the peer and `Host` and rejects browser `Origin` on native routes. Pairing works from a draft. Open the same Project in Studio before exchanging geometry. A standalone Project supports reads and writes. A LAN Project supports reads after synchronization.
+客戶端直接連到 `http://127.0.0.1:<port>`，並關閉重新導向、代理伺服器與 Cookie。宿主會檢查連線來源與 `Host`，並拒絕帶有瀏覽器 `Origin` 的原生 API 請求。草稿專案即可配對。交換幾何前，需在 Studio 開啟同一個專案。獨立專案可讀寫，LAN 共享專案在同步完成後可讀取。
 
-## Send and read geometry
+## 發送與讀回幾何
 
-1. Set an **ID** on an enabled Asterism **Geometry Input** and **Geometry Output**. Use letters, numbers, hyphens or underscores. IDs are case-sensitive and unique within each direction.
-2. Obtain the Input's strong ETag from `GET /v0.0/asterism/ports`. Send a complete tree to `PUT /v0.0/asterism/inputs/{id}` with `If-Match` and a new UUID in `X-Tor-Request-Id`.
-3. Follow the `202` response's relative `Location` on the same host with the same grant. The receipt is `pending`, `committed` or `rejected`. The committed result contains the Input `id` and its new `etag`. Retry uncertain writes with the same UUID, path, headers and body bytes.
-4. Read `GET /v0.0/asterism/outputs/{id}`. To read the result for a specific Input write, include its UUID in `X-Tor-Request-Id`. The successful response's ETag identifies the Input revision. Retry briefly for `OUTPUT_NOT_READY`. `OUTPUT_UNAVAILABLE` means the result has no usable geometry. A superseded Input revision returns `INPUT_SUPERSEDED`.
+1. 設定已啟用的 **Geometry Input** 和 **Geometry Output** 的 **ID**。ID 可用英文字母、數字、連字號或底線，區分大小寫，並在各自的輸入或輸出方向中保持唯一。
+2. 用 `GET /v0.0/asterism/ports` 取得 Input 的強式 ETag。以 `PUT /v0.0/asterism/inputs/{id}` 送出完整資料樹，在 `If-Match` 填入 ETag，並在 `X-Tor-Request-Id` 填入新的 UUID。
+3. 收到 `202` 後，使用同一份授權查詢 `Location` 指定的同宿主相對路徑 `GET /v0.0/requests/{requestId}`。回執狀態為 `pending`、`committed` 或 `rejected`。`committed` 的結果包含 Input 的 `id` 與新 `etag`。如果需要重試結果未明的寫入，請沿用相同的 UUID、路徑、標頭和本文位元組。
+4. 使用 `GET /v0.0/asterism/outputs/{id}` 讀回結果。要讀指定寫入的結果，請在 `X-Tor-Request-Id` 填入該次 UUID。成功回應的 ETag 對應該 Input 版本。遇到 `OUTPUT_NOT_READY` 可稍後重試，`OUTPUT_UNAVAILABLE` 表示目前沒有可用幾何，被新版取代的 Input 版本會回傳 `INPUT_SUPERSEDED`。
 
-Each write replaces the full Input tree and queues Asterism evaluation. An invalid write retains the previous snapshot. Clearing or changing an Input ID clears its data. Disabling suspends exchange and changes the ETag. Re-enabling the same Input retains its snapshot. Closing the Project releases the grant and in-memory exchange data. Use **Bake** or **Bake Geometry Tree** to create Station objects.
+每次寫入會替換 Input 的完整資料樹，並排入 Asterism 求解。寫入驗證失敗時保留前一筆資料。清空或修改 Input ID 會清除資料。停用 Input 會暫停交換並更新 ETag，重新啟用同一個 Input 時會保留原有資料。關閉專案會釋放授權和記憶體中的交換資料。用 **Bake** 或 **Bake Geometry Tree** 將結果存成 Station 物件。
 
-## Geometry
+## 幾何格式
 
-The tree uses `schemaVersion: "0.0"`, Project world coordinates and metres. Branch paths, item order, null slots and empty branches are preserved. The collection can mix points, lines, polylines, planes, boxes, triangle meshes and exact STEP faces, shells or solids.
+資料樹使用 `schemaVersion: "0.0"`，座標為專案世界座標，單位為公尺。傳輸保留分支路徑、項目順序、`null` 和空分支。單一 Collection 可以混合點、直線、多段線、平面、方體、三角網格，以及精確的 STEP 面、殼與實體。
 
-Each STEP item represents one connected shape. The receiver checks its declared type and uses the declared STEP units. Torquetum preserves the exact source geometry and prepares a tessellation for viewing. For unsupported items or invalid dimensions, inspect the branch and item location in the error. Transfer limits are advertised by the paired Project.
+每個 STEP 項目代表一個連通形狀。接收端會驗證宣告的幾何類型並使用 STEP 的宣告單位。Torquetum 保留精確幾何，再產生顯示用網格。遇到不支援的項目或無效尺寸時，可從錯誤資訊查出分支與項目位置。配對的專案會提供傳輸上限。
 
-Use the synthetic [connection example](fixtures/connection.json), [basic collection](fixtures/geometry-collection-basic.json) and [mixed STEP collection](fixtures/geometry-collection.json) to check client payloads. For Rhino geometry conversion and Grasshopper instructions, see the [Alidade guide](https://github.com/Avery320/alidade#readme).
+可使用隨附的合成樣本核對客戶端資料。Grasshopper 操作與 Rhino 幾何轉換請參照 Alidade 使用說明。 [配對樣本](fixtures/connection.json) · [基本 Collection](fixtures/geometry-collection-basic.json) · [混合 STEP Collection](fixtures/geometry-collection.json) · [Alidade 使用說明](https://github.com/Avery320/alidade#readme)
 
-## Structure
+## 專案結構
 
 ```text
-contracts/      OpenAPI and Geometry Collection JSON Schema
-fixtures/       Sample connection and geometry payloads
-examples/       Python end-to-end exchange example
-rust/           HTTP host, internal bridge transport and Rust tests
-src/            TypeScript bridge, pairing and receipt handling
-tests/          TypeScript session tests and shared bridge fixture
+contracts/      OpenAPI 與 Geometry Collection JSON Schema
+fixtures/       配對和幾何資料樣本
+examples/       Python 完整收發範例
+rust/           Rust HTTP 宿主、內部橋接與測試
+src/            TypeScript 橋接、配對與回執處理
+tests/          TypeScript 工作階段測試和共用橋接樣本
 ```
 
-## Development
+## 開發與驗收
 
-Use Node.js 22.12 or later, pnpm 10 and Rust 1.91.1 or later. Run these checks from the repository root.
+使用 Node.js 22.12 以上、pnpm 10，以及 Rust 1.91.1 以上。從儲存庫根目錄執行以下命令。
 
 ```sh
 pnpm install --frozen-lockfile
@@ -61,8 +63,8 @@ pnpm test
 cargo test --manifest-path rust/Cargo.toml --locked
 ```
 
-The unit tests exercise the host and session with fixtures. Run the Quick start against a Torquetum Project to verify the full HTTP exchange.
+單元測試使用樣本驗證 HTTP 宿主與工作階段。需要驗證完整 HTTP 收發時，請依快速開始連到實際運行的 Torquetum 專案。
 
-## License
+## 授權
 
-Distributed under the [MIT License](LICENSE).
+本專案以 MIT 授權發布。 [MIT 授權全文](LICENSE)
