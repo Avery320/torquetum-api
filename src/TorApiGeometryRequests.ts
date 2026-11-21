@@ -28,7 +28,9 @@ export interface TorApiGeometryExchange<Prepared> {
   list(): unknown;
   read(portId: string, signal: AbortSignal, expected?: CommittedInput): Promise<unknown>;
   checkWrite(portId: string, ifMatch: string): void;
+  /** Decode and validate the candidate tree. Applying it to the Input belongs to commit. */
   prepare(intent: GeometryWriteIntent, signal: AbortSignal): Promise<Prepared>;
+  /** Recheck the Input revision and replace its tree synchronously. */
   commit(intent: GeometryWriteIntent, prepared: Prepared): CommittedInput;
 }
 
@@ -96,6 +98,7 @@ export class TorApiGeometryRequests<Prepared> {
         const expected = request.requestId ? committedInput(receipts.get(request.requestId)) : undefined;
         try {
           const collection = await geometry.read(request.portId, AbortSignal.any([signal, timeout]), expected);
+          // Export can outlive the Project or grant that authorized it.
           access('read');
           return { status: 200, body: collection, ...(expected ? { etag: expected.etag } : {}) };
         } catch (error) {
@@ -118,6 +121,7 @@ export class TorApiGeometryRequests<Prepared> {
       }
       const fingerprint = JSON.stringify([portId, ifMatch, mediaType, bodySha256]);
       const accepted = { status: 202, body: { requestId: id }, retryAfterSeconds: 1 };
+      // Reuse the receipt before checking the revision, which a successful first write may have changed.
       const previous = receipts.get(id);
       if (previous) {
         if (previous.fingerprint !== fingerprint) {
@@ -141,6 +145,7 @@ export class TorApiGeometryRequests<Prepared> {
       void (async () => {
         try {
           const prepared = await geometry.prepare(intent, signal);
+          // Recheck the grant after decoding. The adapter checks the revision again at commit.
           signal.throwIfAborted();
           receipt.result = { httpStatus: 200, ...access('write').commit(intent, prepared) };
         } catch (cause) {

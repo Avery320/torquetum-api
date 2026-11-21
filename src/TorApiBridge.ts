@@ -78,6 +78,7 @@ function jsonObject(input: string | Uint8Array): Record<string, unknown> | null 
   }
 }
 
+// Decode the frame from Rust's request_frame. The relay ID identifies this HTTP exchange.
 function readRequest(frame: ArrayBuffer, maxBodyBytes: number) {
   if (frame.byteLength < 4) return null;
   const headerLength = new DataView(frame).getUint32(0);
@@ -137,6 +138,7 @@ export class TorApiBridge {
     private readonly socketFactory: (url: string) => Socket = (url) => new WebSocket(url),
   ) {}
 
+  /** Wait for host acknowledgement before the Project can issue pairing codes for this route. */
   async register(instanceId: string, handle: ProjectRoute['handle'], onDisconnect: () => void): Promise<Registration> {
     if (this.disposed || !UUID.test(instanceId)) throw new Error('Invalid Tor API registration.');
     const open = !this.connection;
@@ -238,6 +240,7 @@ export class TorApiBridge {
         body: { error: { code: 'BRIDGE_UNAVAILABLE', message: 'The Studio bridge could not complete the request.' } },
       }, maxBodyBytes);
     }
+    // The Project may have unregistered while its handler was running.
     if (this.connection === connection && connection.projects.get(instanceId) === project) this.send(connection, response);
   }
 

@@ -54,6 +54,7 @@ def until_ready(probe, message):
 
 
 def smoke(input_selector, output_selector):
+    """Replace the test Input twice to verify exact readback, replay, and superseded revisions."""
     port, invite = invitation()
     token = None
 
@@ -124,6 +125,7 @@ def smoke(input_selector, output_selector):
                     "GET", output_path, headers={REQUEST_ID: previous_id}, expected=409,
                 )
                 require(superseded["error"]["code"] == "INPUT_SUPERSEDED", "A newer write did not supersede the old output.")
+            # Asterism can keep evaluating the Output after the Input is committed.
             output, reply_headers = until_ready(
                 lambda: request(
                     "GET", output_path, headers={REQUEST_ID: request_id}, pending=(409, "OUTPUT_NOT_READY"),

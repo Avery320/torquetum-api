@@ -17,6 +17,7 @@ struct WebBootstrap {
 }
 
 impl TorApiHost {
+    /// Adds the origin-checked bootstrap used by the local Studio page to attach its bridge.
     pub fn web_router(&self, dev_origin: Option<&str>) -> Router {
         self.router().merge(
             Router::new()

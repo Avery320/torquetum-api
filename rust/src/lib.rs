@@ -1,3 +1,8 @@
+//! Local HTTP transport and Studio WebSocket bridge for Torquetum.
+//!
+//! The host validates the transport and forwards each request to its registered
+//! Project. The Studio session owns client pairing, grants, and geometry exchange.
+
 use std::{
     collections::{HashMap, hash_map::Entry},
     net::SocketAddr,
@@ -51,6 +56,7 @@ pub struct TorApiHost {
     state: Arc<HostState>,
 }
 
+/// Startup data for the Studio bridge. Its one-use ticket is bound to the requesting origin.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bootstrap {
@@ -208,6 +214,7 @@ struct Pending {
     response: oneshot::Sender<Response>,
 }
 
+/// Releases the pending entry when the waiting HTTP relay completes, times out, or is canceled.
 struct PendingLease<'a> {
     state: &'a HostState,
     relay_id: Uuid,
@@ -572,6 +579,7 @@ async fn relay(
         instance
     }
     .ok_or_else(|| route.unauthorized())?;
+    // Replay checks compare the original body bytes, including JSON formatting.
     let body_sha256 = is_input.then(|| format!("{:x}", Sha256::digest(&body)));
     let port_id = target.as_deref().filter(|_| route != Route::Receipt);
     let relay_id = Uuid::new_v4();
@@ -650,6 +658,7 @@ async fn read_body(request: Request) -> Result<Bytes, TransportError> {
         })
 }
 
+// The instance ID selects a route. The Project session validates the credential itself.
 fn routing_instance(credential: &str) -> Option<Uuid> {
     let (id, nonce) = credential.split_once('.')?;
     if nonce.len() != 43
@@ -662,6 +671,7 @@ fn routing_instance(credential: &str) -> Option<Uuid> {
     Uuid::parse_str(id).ok()
 }
 
+// The TypeScript bridge reads a big-endian u32 header length, a UTF-8 JSON header, and the raw body.
 fn request_frame(header: RequestHeader<'_>, body: &[u8]) -> Result<Bytes, TransportError> {
     let header = serde_json::to_vec(&header).map_err(|_| TransportError::InvalidRequest)?;
     if header.len() > MAX_HEADER_BYTES {
@@ -725,6 +735,7 @@ fn receive_response(state: &HostState, owner: Uuid, frame: Bytes) {
     if pending.owner != owner || frame.len() - 4 - length > pending.route.response_limit() {
         return;
     }
+    // Build the relative receipt URL from the admitted write's request ID at the HTTP host.
     let location = match (status, pending.route, pending.request_id) {
         (StatusCode::ACCEPTED, Route::AsterismInput, Some(id)) => {
             Some(format!("{API_PREFIX}{RECEIPTS_PATH}/{id}"))

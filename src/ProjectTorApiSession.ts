@@ -80,7 +80,10 @@ function parsePair(body: Uint8Array): { invite: string; clientName: string } | u
   } catch { return undefined; }
 }
 
-/** Owns one Project's invitations and grants across Studio activation. */
+/**
+ * Keeps one Project's invites and grants when Studio opens its draft.
+ * Replacing the connection revokes that instance's grants and cancels their work.
+ */
 export class ProjectTorApiSession<Prepared> {
   private connection?: Connection<Prepared> | undefined;
   private invite?: Invite | undefined;
@@ -173,6 +176,7 @@ export class ProjectTorApiSession<Prepared> {
       this.invalidate();
       void this.updateAvailability();
     }).then((registration) => {
+      // Acknowledgement can arrive after the Project has closed or changed.
       if (this.connection !== connection || this.readProject()?.projectId !== connection.projectId) {
         registration.unregister();
         return;
