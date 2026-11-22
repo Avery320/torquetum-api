@@ -17,6 +17,7 @@ export interface TorApiRequest {
   readonly ifMatch?: string | undefined;
   readonly mediaType?: string | undefined;
   readonly bodySha256?: string | undefined;
+  readonly credentialHash?: string | undefined;
 }
 
 export interface TorApiResponse {
@@ -28,12 +29,14 @@ export interface TorApiResponse {
 interface Registration {
   readonly endpoint: string;
   readonly maxBodyBytes: number;
+  readonly locator?: string | undefined;
   unregister(): void;
 }
 
 type Socket = Pick<WebSocket, 'OPEN' | 'readyState' | 'binaryType' | 'addEventListener' | 'close' | 'send'>;
 
 interface ProjectRoute {
+  readonly projectId: string;
   readonly handle: (request: TorApiRequest) => TorApiResponse | Promise<TorApiResponse>;
   readonly onDisconnect: () => void;
   pending: {
@@ -86,7 +89,7 @@ function readRequest(frame: ArrayBuffer, maxBodyBytes: number) {
     || frame.byteLength - bodyStart > maxBodyBytes) return null;
   const header = jsonObject(new Uint8Array(frame, 4, headerLength));
   if (!header) return null;
-  const { type, route, relayId, instanceId, bearer, portId, requestId, ifMatch, mediaType, bodySha256 } = header;
+  const { type, route, relayId, instanceId, bearer, portId, requestId, ifMatch, mediaType, bodySha256, credentialHash } = header;
   if (type !== 'request'
     || typeof relayId !== 'string' || !UUID.test(relayId)
     || typeof instanceId !== 'string' || !UUID.test(instanceId)
@@ -98,11 +101,12 @@ function readRequest(frame: ArrayBuffer, maxBodyBytes: number) {
     || (requestId !== undefined && (typeof requestId !== 'string' || !UUID.test(requestId)))
     || (ifMatch !== undefined && typeof ifMatch !== 'string')
     || (mediaType !== undefined && typeof mediaType !== 'string')
-    || (bodySha256 !== undefined && (typeof bodySha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(bodySha256)))) return null;
+    || (bodySha256 !== undefined && (typeof bodySha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(bodySha256)))
+    || (credentialHash !== undefined && (route !== 'pair' || typeof credentialHash !== 'string' || !/^[a-f0-9]{64}$/u.test(credentialHash)))) return null;
   const request: TorApiRequest = {
     route: route as TorApiRoute,
     body: new Uint8Array(frame, bodyStart),
-    bearer, portId, requestId, ifMatch, mediaType, bodySha256,
+    bearer, portId, requestId, ifMatch, mediaType, bodySha256, credentialHash,
   };
   return { instanceId, relayId, request };
 }
@@ -138,7 +142,7 @@ export class TorApiBridge {
   ) {}
 
   /** Wait for host acknowledgement before the Project can issue pairing codes for this route. */
-  async register(instanceId: string, handle: ProjectRoute['handle'], onDisconnect: () => void): Promise<Registration> {
+  async register(instanceId: string, projectId: string, handle: ProjectRoute['handle'], onDisconnect: () => void): Promise<Registration> {
     if (this.disposed || !UUID.test(instanceId)) throw new Error('Invalid Tor API registration.');
     const open = !this.connection;
     const connection = this.connection ??= {
@@ -150,10 +154,10 @@ export class TorApiBridge {
     if (connection.projects.has(instanceId)) throw new Error('Project is already registered with Tor API.');
     const registered = new Promise<Registration>((resolve, reject) => {
       const timer = setTimeout(() => this.disconnect(connection), CONTROL_TIMEOUT_MS);
-      connection.projects.set(instanceId, { handle, onDisconnect, pending: { resolve, reject, timer } });
+      connection.projects.set(instanceId, { projectId, handle, onDisconnect, pending: { resolve, reject, timer } });
     });
     if (open) void this.connect(connection);
-    else if (connection.attached) this.send(connection, { type: 'register', instanceId });
+    else if (connection.attached) this.send(connection, { type: 'register', instanceId, projectId });
     return registered;
   }
 
@@ -199,9 +203,10 @@ export class TorApiBridge {
       const control = jsonObject(data);
       if (control?.type === 'attached' && !connection.attached) {
         connection.attached = true;
-        for (const instanceId of connection.projects.keys()) this.send(connection, { type: 'register', instanceId });
+        for (const [instanceId, { projectId }] of connection.projects) this.send(connection, { type: 'register', instanceId, projectId });
       } else if (control?.type === 'registered' && connection.attached && typeof control.instanceId === 'string') {
-        this.acknowledge(connection, control.instanceId, bootstrap);
+        const locator = typeof control.locator === 'string' && /^[a-f0-9]{64}$/u.test(control.locator) ? control.locator : undefined;
+        this.acknowledge(connection, control.instanceId, bootstrap, locator);
       }
     } else if (connection.attached && data instanceof ArrayBuffer) {
       const relay = readRequest(data, bootstrap.maxBodyBytes);
@@ -209,14 +214,14 @@ export class TorApiBridge {
     }
   }
 
-  private acknowledge(connection: Connection, instanceId: string, { endpoint, maxBodyBytes }: TorApiBootstrap): void {
+  private acknowledge(connection: Connection, instanceId: string, { endpoint, maxBodyBytes }: TorApiBootstrap, locator?: string): void {
     const project = connection.projects.get(instanceId);
     if (!project?.pending) return;
     const { resolve, timer } = project.pending;
     project.pending = null;
     clearTimeout(timer);
     resolve({
-      endpoint, maxBodyBytes,
+      endpoint, maxBodyBytes, locator,
       unregister: () => {
         if (connection.projects.get(instanceId) !== project) return;
         connection.projects.delete(instanceId);

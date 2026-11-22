@@ -1,12 +1,12 @@
 {
-  "inviteCode": "TORAPI.eyJlbmRwb2ludCI6Imh0dHA6Ly8xMjcuMC4wLjE6NDkzODAiLCJpbnZpdGUiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEuRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRSJ9",
+  "inviteCode": "TORAPI.eyJlbmRwb2ludCI6Imh0dHA6Ly8xMjcuMC4wLjE6NDkzODAiLCJpbnZpdGUiOiJFUkVSRVJFUlFSR0JFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSRVJFUkVSIn0",
   "pair": {
     "request": {
       "method": "POST",
       "path": "/v0.0/pair",
       "contentType": "application/json",
       "body": {
-        "invite": "11111111-1111-4111-8111-111111111111.ERERERERERERERERERERERERERERERERERERERERERE",
+        "credential": "ERERERERQRGBERERERERERERERERERERERERERERERERERERERERERERERERERER",
         "clientName": "Alidade fixture"
       }
     },
@@ -24,7 +24,7 @@
         ],
         "limits": {},
         "grantId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        "accessToken": "11111111-1111-4111-8111-111111111111.IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI",
+        "accessToken": "ERERERERQRGBERERERERESIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi",
         "expiresAt": "2035-01-01T00:00:00Z"
       }
     }
@@ -33,7 +33,7 @@
     "request": {
       "method": "GET",
       "path": "/v0.0/project",
-      "authorization": "Bearer 11111111-1111-4111-8111-111111111111.IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI"
+      "authorization": "Bearer ERERERERQRGBERERERERESIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi"
     },
     "response": {
       "status": 200,

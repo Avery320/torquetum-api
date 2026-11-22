@@ -89,7 +89,7 @@ def smoke(input_selector, output_selector):
 
     with closing(HTTPConnection("127.0.0.1", port, timeout=65)) as client:
         grant, _ = request("POST", "/pair", body={
-            "invite": invite, "clientName": "Python Asterism example",
+            "credential": invite, "clientName": "Python Asterism example",
         })
         token = grant["accessToken"]
         project, _ = request("GET", "/project")

@@ -10,7 +10,7 @@ Use your own geometry source and HTTP client. Convert the source geometry to a G
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `POST` | `/v0.0/pair` | Redeem a one-use pairing invitation for a Project `accessToken`. |
+| `POST` | `/v0.0/pair` | Exchange a one-use invitation or remembered credential for a Project `accessToken`. |
 | `GET` | `/v0.0/project` | Get the Project identity, read and write permissions, exchange readiness, and transfer limits. |
 | `GET` | `/v0.0/asterism/ports` | List addressable Geometry Input and Geometry Output IDs and the ETag of each Input. |
 | `PUT` | `/v0.0/asterism/inputs/{id}` | Stage a full geometry tree for the Input to apply when the user presses Read. An accepted write includes the receipt location. |
@@ -43,7 +43,7 @@ Replace the example URL and `<invite>` with the decoded values, then take the `a
 tor_endpoint='http://127.0.0.1:44555'
 curl --noproxy '*' -sS "$tor_endpoint/v0.0/pair" \
   -H 'Content-Type: application/json' \
-  --data '{"invite":"<invite>","clientName":"Geometry example"}'
+  --data '{"credential":"<invite>","clientName":"Geometry example"}'
 ```
 
 Set `tor_token` to the returned `accessToken` and use it for either direction. Query `GET /v0.0/project` to check `canRead`, `canWrite`, the supported geometry `kinds`, and transfer `limits`.
@@ -55,6 +55,14 @@ curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
 ```
 
 Native clients connect directly with redirects, proxies and cookies disabled. The host checks the peer and `Host` and rejects browser `Origin` on native routes. Pairing works from a draft. Open the same Project in Studio before exchanging geometry. A standalone Project supports reads and writes. A LAN Project supports reads after synchronization. [Full HTTP contract](contracts/openapi.yaml)
+
+### Remember a client
+
+Pairing codes are single-use and expire after five minutes. An `accessToken` is 64 characters and lasts eight hours. Closing the Project ends its current access sessions.
+
+To remember a client, generate a random 32-byte secret and include its SHA-256 lowercase hex digest as `remember` in the first pairing request. Keep the secret, returned `locator`, and `projectId` in local storage scoped to the OS user. The authorization belongs to the original Studio origin and Project.
+
+After reopening the Project in that Studio, read the live instance record in `~/.torquetum/connections/projects/<locator>/`. Each JSON file holds `port`, `instanceId`, and `processId`. Encode the running instance's 16 UUID bytes in standard byte order followed by the original 32 secret bytes as unpadded base64url. Use that value as `credential` on the same `/v0.0/pair` route and check the returned `projectId` and `locator`. **Revoke** in **External Connections** also revokes the ability to reconnect.
 
 ## Send geometry
 

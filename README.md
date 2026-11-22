@@ -10,7 +10,7 @@ Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾�
 
 | 方法 | 路徑 | 用途 |
 | --- | --- | --- |
-| `POST` | `/v0.0/pair` | 用一次性配對邀請取得專案的 `accessToken`。 |
+| `POST` | `/v0.0/pair` | 用一次性邀請或已記住的憑證取得專案的 `accessToken`。 |
 | `GET` | `/v0.0/project` | 查詢專案身分、讀寫權限、交換就緒狀態與傳輸上限。 |
 | `GET` | `/v0.0/asterism/ports` | 列出可交換資料的 Geometry Input 和 Geometry Output ID，以及各 Input 的 ETag。 |
 | `PUT` | `/v0.0/asterism/inputs/{id}` | 將整棵幾何資料樹送到指定 Input，等待 Asterism 按 Read。受理後回傳回執位置。 |
@@ -43,7 +43,7 @@ cd torquetum-api
 tor_endpoint='http://127.0.0.1:44555'
 curl --noproxy '*' -sS "$tor_endpoint/v0.0/pair" \
   -H 'Content-Type: application/json' \
-  --data '{"invite":"<invite>","clientName":"Geometry example"}'
+  --data '{"credential":"<invite>","clientName":"Geometry example"}'
 ```
 
 將 `tor_token` 填成實際的 `accessToken`。後續送入或讀取皆可使用這組授權。用 `GET /v0.0/project` 可查詢 `canRead`、`canWrite`、支援類型 `kinds` 和傳輸上限 `limits`。
@@ -55,6 +55,16 @@ curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
 ```
 
 原生客戶端需直接連線，並關閉重新導向、代理伺服器和 Cookie。宿主會檢查連線來源與 `Host`，並拒絕帶有瀏覽器 `Origin` 的原生 API 請求。草稿專案即可配對，需在 Studio 開啟同一個專案才可交換幾何。獨立專案可讀寫，LAN 共享專案在同步完成後可讀取。 [完整 HTTP 規格](contracts/openapi.yaml)
+
+### 記住客戶端
+
+配對碼可使用一次，並在 5 分鐘後過期。`accessToken` 有 64 個字元，有效期為 8 小時。關閉專案會結束當前的存取工作階段。
+
+客戶端若需要重開後恢復連線，可在首次配對時額外傳入 `remember`。它是由客戶端產生的 32 位元組隨機密鑰的 SHA-256 小寫十六進位雜湊。客戶端把密鑰、`projectId` 和回應的 `locator` 存在同一使用者的本機儲存空間。
+
+重開同一個 Studio 與 Project 後，到 `~/.torquetum/connections/projects/<locator>/` 讀取目前實例的 JSON 位址檔。檔案包含 `port`、`instanceId` 和 `processId`。使用仍在執行的實例。把 `instanceId` 的 16 個 UUID 位元組依標準順序接上原始 32 位元組密鑰，以無填充 base64url 編成 `credential`，再呼叫同一個 `/v0.0/pair`。確認回應的 `projectId` 和 `locator` 與原本相符。
+
+已記住的授權屬於原本的 Studio 來源與專案。在 **External Connections** 按 **Revoke** 可撤銷個別授權及其重連權限。
 
 ## 送入幾何
 

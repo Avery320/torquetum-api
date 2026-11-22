@@ -14,11 +14,13 @@
   },
   "register": {
     "type": "register",
-    "instanceId": "11111111-1111-4111-8111-111111111111"
+    "instanceId": "11111111-1111-4111-8111-111111111111",
+    "projectId": "project-fixture"
   },
   "registered": {
     "type": "registered",
-    "instanceId": "11111111-1111-4111-8111-111111111111"
+    "instanceId": "11111111-1111-4111-8111-111111111111",
+    "locator": null
   },
   "unregister": {
     "type": "unregister",
@@ -29,7 +31,8 @@
     "relayId": "22222222-2222-4222-8222-222222222222",
     "instanceId": "11111111-1111-4111-8111-111111111111",
     "route": "pair",
-    "mediaType": "application/json"
+    "mediaType": "application/json",
+    "credentialHash": "02d449a31fbb267c8f352e9968a79e3e5fc95c1bbeaa502fd6454ebde5a4bedc"
   },
   "response": {
     "type": "response",

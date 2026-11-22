@@ -1,9 +1,11 @@
 use super::{Bootstrap, TorApiHost};
 use axum::http::StatusCode;
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::{
     net::{Ipv4Addr, SocketAddr},
+    path::PathBuf,
     time::Duration,
 };
 use tokio::{
@@ -20,7 +22,11 @@ use uuid::Uuid;
 
 const WEB_ORIGIN: &str = "http://127.0.0.1:5173";
 const DEADLINE: Duration = Duration::from_secs(3);
-const FIXTURE_TOKEN: &str = "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI";
+fn credential(instance: Uuid) -> String {
+    let mut bytes = [0x22; 48];
+    bytes[..16].copy_from_slice(instance.as_bytes());
+    URL_SAFE_NO_PAD.encode(bytes)
+}
 type Studio = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 fn authority(host: &TorApiHost) -> &str {
@@ -81,17 +87,29 @@ async fn attach(bootstrap: &Bootstrap, origin: &str) -> Studio {
 }
 
 async fn register(studio: &mut Studio, instance: Uuid) {
-    control(studio, json!({"type":"register", "instanceId":instance})).await;
+    control(
+        studio,
+        json!({"type":"register", "instanceId":instance, "projectId":"test-project"}),
+    )
+    .await;
     assert_eq!(
         serde_json::from_str::<Value>(receive(studio).await.to_text().unwrap()).unwrap(),
-        json!({"type":"registered", "instanceId":instance})
+        json!({"type":"registered", "instanceId":instance, "locator":null})
     );
 }
 
 async fn start_host() -> (TorApiHost, watch::Sender<()>) {
+    start_host_with_directory(None).await
+}
+
+async fn start_host_with_directory(directory: Option<PathBuf>) -> (TorApiHost, watch::Sender<()>) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let (shutdown, receiver) = watch::channel(());
-    let host = TorApiHost::new(listener.local_addr().unwrap().port(), receiver);
+    let host = TorApiHost::with_project_directory(
+        listener.local_addr().unwrap().port(),
+        receiver,
+        directory,
+    );
     let router = host
         .router()
         .into_make_service_with_connect_info::<SocketAddr>();
@@ -165,7 +183,7 @@ async fn project_request(host: &TorApiHost, instance: Uuid) -> TcpStream {
         host,
         "GET /v0.0/project",
         authority(host),
-        &format!("Authorization: Bearer {instance}.{FIXTURE_TOKEN}\r\n"),
+        &format!("Authorization: Bearer {}\r\n", credential(instance)),
         b"",
     )
     .await
@@ -246,7 +264,7 @@ async fn routes_only_to_the_studio_that_owns_the_project() {
     respond(&mut other, &request["relayId"], 200, b"wrong socket").await;
     control(
         &mut other,
-        json!({"type":"register", "instanceId":instance}),
+        json!({"type":"register", "instanceId":instance, "projectId":"test-project"}),
     )
     .await;
     assert_closed(&mut other).await;
@@ -329,7 +347,7 @@ async fn forwards_pair_body_and_blocks_web_headers_and_chunked_oversize() {
             &host,
             "GET /v0.0/project",
             host_header,
-            &format!("Authorization: Bearer {instance}.{FIXTURE_TOKEN}\r\n{extra}"),
+            &format!("Authorization: Bearer {}\r\n{extra}", credential(instance)),
             b"",
         )
         .await;
@@ -438,7 +456,7 @@ async fn relay_timeout_releases_capacity_for_another_request() {
 async fn generates_write_receipts_and_reads_outputs_by_id() {
     let (host, mut studio, instance, _shutdown) = project_host().await;
     let request_id = Uuid::new_v4();
-    let bearer = format!("Authorization: Bearer {instance}.{FIXTURE_TOKEN}\r\n");
+    let bearer = format!("Authorization: Bearer {}\r\n", credential(instance));
     let auth = format!("{bearer}X-Tor-Request-Id: {request_id}\r\n");
     let body = br#"{"schemaVersion":"0.0"}"#;
     let body_headers = format!(
@@ -494,4 +512,49 @@ async fn generates_write_receipts_and_reads_outputs_by_id() {
     assert!(request.get("requestId").is_none());
     respond(&mut studio, &request["relayId"], 200, b"{}").await;
     assert_eq!(finish_http(client).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn publishes_and_releases_local_project_addresses() {
+    let directory = std::env::temp_dir().join(format!("tor-api-locators-{}", Uuid::new_v4()));
+    let (host, shutdown) = start_host_with_directory(Some(directory.clone())).await;
+    let mut first = attach(&ticket(&host), WEB_ORIGIN).await;
+    let instance = Uuid::new_v4();
+    let project = "remembered-fixture";
+    control(
+        &mut first,
+        json!({"type":"register", "instanceId":instance, "projectId":project}),
+    )
+    .await;
+    let ack: Value = serde_json::from_str(receive(&mut first).await.to_text().unwrap()).unwrap();
+    let key = ack["locator"].as_str().unwrap();
+    let path = directory.join(key).join(format!("{instance}.json"));
+    let published: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        published,
+        json!({"instanceId":instance, "port":host.state.port, "processId":std::process::id()})
+    );
+
+    let (next_host, next_shutdown) = start_host_with_directory(Some(directory.clone())).await;
+    let mut second = attach(&ticket(&next_host), WEB_ORIGIN).await;
+    let next_instance = Uuid::new_v4();
+    control(
+        &mut second,
+        json!({"type":"register", "instanceId":next_instance, "projectId":project}),
+    )
+    .await;
+    let next_ack: Value =
+        serde_json::from_str(receive(&mut second).await.to_text().unwrap()).unwrap();
+    assert_eq!(next_ack["locator"], key);
+    let next_path = directory.join(key).join(format!("{next_instance}.json"));
+    assert!(next_path.exists());
+    drop(shutdown);
+    assert_closed(&mut first).await;
+    assert!(!path.exists());
+    assert!(next_path.exists());
+    drop(next_shutdown);
+    assert_closed(&mut second).await;
+    assert!(!next_path.exists());
+    std::fs::remove_dir(directory.join(key)).unwrap();
+    std::fs::remove_dir(directory).unwrap();
 }

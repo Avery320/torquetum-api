@@ -6,6 +6,7 @@
 use std::{
     collections::{HashMap, hash_map::Entry},
     net::SocketAddr,
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -33,7 +34,10 @@ use tokio::{
 };
 use uuid::Uuid;
 
+mod project_location;
 mod web_bootstrap;
+
+use project_location::ProjectLocation;
 
 const BRIDGE_PATH: &str = "/internal/tor-api/bridge";
 const API_PREFIX: &str = "/v0.0";
@@ -73,10 +77,19 @@ enum TicketError {
 
 impl TorApiHost {
     pub fn new(port: u16, shutdown: watch::Receiver<()>) -> Self {
+        Self::with_project_directory(port, shutdown, project_location::local_directory())
+    }
+
+    fn with_project_directory(
+        port: u16,
+        shutdown: watch::Receiver<()>,
+        project_directory: Option<PathBuf>,
+    ) -> Self {
         Self {
             state: Arc::new(HostState {
                 port,
                 authority: format!("127.0.0.1:{port}"),
+                project_directory,
                 registry: Mutex::default(),
                 requests: Semaphore::new(MAX_REQUESTS),
                 connections: Arc::new(Semaphore::new(MAX_CONNECTIONS)),
@@ -182,6 +195,7 @@ fn valid_desktop_origin(origin: &str) -> bool {
 struct HostState {
     port: u16,
     authority: String,
+    project_directory: Option<PathBuf>,
     registry: Mutex<Registry>,
     requests: Semaphore,
     connections: Arc<Semaphore>,
@@ -203,6 +217,7 @@ struct Ticket {
 struct SocketRoute {
     owner: Uuid,
     outbound: mpsc::Sender<Bytes>,
+    location: Option<ProjectLocation>,
 }
 
 struct Pending {
@@ -267,9 +282,16 @@ fn single_header(headers: &HeaderMap, key: HeaderName) -> Option<&str> {
     rename_all_fields = "camelCase"
 )]
 enum Control {
-    Attach { ticket: String },
-    Register { instance_id: Uuid },
-    Unregister { instance_id: Uuid },
+    Attach {
+        ticket: String,
+    },
+    Register {
+        instance_id: Uuid,
+        project_id: String,
+    },
+    Unregister {
+        instance_id: Uuid,
+    },
 }
 
 async fn bridge(
@@ -340,11 +362,16 @@ async fn serve_socket(state: Arc<HostState>, mut socket: WebSocket, origin: Stri
         };
         match received {
             Some(Ok(Message::Text(text))) => match parse_control(&text) {
-                Some(Control::Register { instance_id }) => {
-                    if !register(&state, instance_id, owner, &outbound) {
+                Some(Control::Register {
+                    instance_id,
+                    project_id,
+                }) => {
+                    let Some(locator) =
+                        register(&state, &origin, &project_id, instance_id, owner, &outbound)
+                    else {
                         break;
-                    }
-                    let ack = json!({ "type": "registered", "instanceId": instance_id });
+                    };
+                    let ack = json!({ "type": "registered", "instanceId": instance_id, "locator": locator });
                     if !send(&mut socket, Message::Text(ack.to_string().into())).await {
                         break;
                     }
@@ -397,23 +424,33 @@ fn consume_ticket(state: &HostState, key: &str, origin: &str) -> bool {
 
 fn register(
     state: &HostState,
+    origin: &str,
+    project_id: &str,
     instance_id: Uuid,
     owner: Uuid,
     outbound: &mpsc::Sender<Bytes>,
-) -> bool {
+) -> Option<Option<String>> {
+    if project_id.trim().is_empty() || project_id.len() > 256 {
+        return None;
+    }
     let mut registry = state.registry.lock().unwrap();
     let full = registry.routes.len() >= MAX_ROUTES;
-    match registry.routes.entry(instance_id) {
-        Entry::Occupied(entry) => entry.get().owner == owner,
+    let route = match registry.routes.entry(instance_id) {
+        Entry::Occupied(entry) if entry.get().owner == owner => entry.into_mut(),
         Entry::Vacant(entry) if !full => {
+            let location = state.project_directory.as_ref().and_then(|directory| {
+                ProjectLocation::publish(directory, origin, project_id, state.port, instance_id)
+                    .ok()
+            });
             entry.insert(SocketRoute {
                 owner,
                 outbound: outbound.clone(),
-            });
-            true
+                location,
+            })
         }
-        _ => false,
-    }
+        _ => return None,
+    };
+    Some(route.location.as_ref().map(|location| location.key.clone()))
 }
 
 async fn send(socket: &mut WebSocket, message: Message) -> bool {
@@ -453,7 +490,7 @@ impl Route {
 
 #[derive(Deserialize)]
 struct PairInput {
-    invite: String,
+    credential: String,
 }
 
 #[derive(Serialize)]
@@ -476,6 +513,8 @@ struct RequestHeader<'a> {
     if_match: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     body_sha256: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    credential_hash: Option<&'a str>,
 }
 
 async fn forward(
@@ -566,14 +605,18 @@ async fn relay(
     if !has_body && !body.is_empty() {
         return Err(TransportError::InvalidRequest);
     }
-    let instance_id = if is_pair {
+    let (instance_id, credential_hash) = if is_pair {
         let input: PairInput =
             serde_json::from_slice(&body).map_err(|_| TransportError::InvalidRequest)?;
-        routing_instance(&input.invite)
+        let credential = credential_bytes(&input.credential).ok_or_else(|| route.unauthorized())?;
+        (
+            Uuid::from_slice(&credential[..16]).ok(),
+            Some(format!("{:x}", Sha256::digest(&credential[16..]))),
+        )
     } else {
-        instance
-    }
-    .ok_or_else(|| route.unauthorized())?;
+        (instance, None)
+    };
+    let instance_id = instance_id.ok_or_else(|| route.unauthorized())?;
     // Replay checks compare the original body bytes, including JSON formatting.
     let body_sha256 = is_input.then(|| format!("{:x}", Sha256::digest(&body)));
     let port_id = target.as_deref().filter(|_| route != Route::Receipt);
@@ -589,6 +632,7 @@ async fn relay(
         request_id,
         if_match,
         body_sha256: body_sha256.as_deref(),
+        credential_hash: credential_hash.as_deref(),
     };
     let frame = request_frame(header, &body)?;
     let (reply, receiver) = oneshot::channel();
@@ -655,15 +699,16 @@ async fn read_body(request: Request) -> Result<Bytes, TransportError> {
 
 // The instance ID selects a route. The Project session validates the credential itself.
 fn routing_instance(credential: &str) -> Option<Uuid> {
-    let (id, nonce) = credential.split_once('.')?;
-    if nonce.len() != 43
-        || !nonce
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
+    Uuid::from_slice(&credential_bytes(credential)?[..16]).ok()
+}
+
+fn credential_bytes(credential: &str) -> Option<[u8; 48]> {
+    if credential.len() != 64 {
         return None;
     }
-    Uuid::parse_str(id).ok()
+    let mut bytes = [0; 48];
+    URL_SAFE_NO_PAD.decode_slice(credential, &mut bytes).ok()?;
+    Some(bytes)
 }
 
 // The TypeScript bridge reads a big-endian u32 header length, a UTF-8 JSON header, and the raw body.

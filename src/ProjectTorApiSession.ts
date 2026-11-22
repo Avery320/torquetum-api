@@ -3,13 +3,14 @@ import {
   GeometryAccessError, TorApiGeometryRequests, type TorApiGeometryExchange, type TorApiReceipts,
 } from './TorApiGeometryRequests.js';
 import type { TorApiBridge, TorApiRequest, TorApiResponse } from './TorApiBridge.js';
+import { RememberedGrants, grantStorage, type TorApiGrantInfo } from './RememberedGrants.js';
 
 const INVITE_TTL_MS = 5 * 60_000;
 const GRANT_TTL_MS = 8 * 60 * 60_000;
 const MAX_GRANTS = 32;
 const GEOMETRY_KINDS = Object.freeze(schema.$defs.geometry.oneOf.map(({ properties }) => properties.kind.const));
 
-type TorApiScope = 'read' | 'write';
+type TorApiScope = TorApiGrantInfo['scope'];
 export type ProjectTorApiAccess = 'standalone' | 'pending' | 'shared-read';
 
 interface ProjectAccess<Prepared> {
@@ -31,12 +32,10 @@ interface Invite {
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
-interface Grant {
-  readonly id: string;
-  readonly clientName: string;
-  readonly scope: TorApiScope;
+interface Grant extends TorApiGrantInfo {
   readonly expiresAt: number;
   lastUsedAt: number;
+  readonly rememberedHash?: string | undefined;
   readonly receipts: TorApiReceipts;
   readonly abort: AbortController;
 }
@@ -51,15 +50,19 @@ interface Connection<Prepared> {
 
 export interface TorApiSettings {
   readonly inviteCode: string;
-  readonly grants: readonly Pick<Grant, 'id' | 'clientName' | 'scope' | 'lastUsedAt'>[];
+  readonly grants: readonly TorApiGrantInfo[];
 }
 
 const encodeBase64Url = (bytes: Uint8Array): string => (
   btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')
 );
-const newSecret = (instanceId: string): string => (
-  instanceId + '.' + encodeBase64Url(crypto.getRandomValues(new Uint8Array(32)))
-);
+function newSecret(instanceId: string): string {
+  const bytes = new Uint8Array(48);
+  const uuid = instanceId.replaceAll('-', '');
+  for (let index = 0; index < 16; index++) bytes[index] = Number.parseInt(uuid.slice(index * 2, index * 2 + 2), 16);
+  crypto.getRandomValues(bytes.subarray(16));
+  return encodeBase64Url(bytes);
+}
 
 const error = (status: number, code: string, message: string): TorApiResponse => ({
   status, body: { error: { code, message } },
@@ -71,11 +74,13 @@ const readyForPairing = ({ mode, busy, editing }: ProjectAccess<unknown>): boole
 );
 const allowsWrite = ({ mode }: ProjectAccess<unknown>, scope: TorApiScope): boolean => mode === 'standalone' && scope === 'write';
 
-function parsePair(body: Uint8Array): { invite: string; clientName: string } | undefined {
+function parsePair(body: Uint8Array): { credential: string; clientName: string; remember?: string } | undefined {
   try {
     const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body));
-    if (typeof value?.invite !== 'string' || typeof value.clientName !== 'string'
-      || value.clientName.length > 80 || !value.clientName.trim() || Object.keys(value).length !== 2) return undefined;
+    if (typeof value?.credential !== 'string' || typeof value.clientName !== 'string'
+      || value.clientName.length > 80 || !value.clientName.trim()
+      || Object.keys(value).some((key) => key !== 'credential' && key !== 'clientName' && key !== 'remember')
+      || (value.remember !== undefined && (typeof value.remember !== 'string' || !/^[a-f0-9]{64}$/u.test(value.remember)))) return undefined;
     return value;
   } catch { return undefined; }
 }
@@ -88,6 +93,7 @@ export class ProjectTorApiSession<Prepared> {
   private connection?: Connection<Prepared> | undefined;
   private invite?: Invite | undefined;
   private readonly grants = new Map<string, Grant>();
+  private readonly remembered: RememberedGrants;
   private disposed = false;
 
   constructor(
@@ -96,7 +102,8 @@ export class ProjectTorApiSession<Prepared> {
     private readonly changed: () => void,
     private readonly createUuid: () => string,
     private readonly geometryLimits: GeometryLimits,
-  ) {}
+    storage = grantStorage(),
+  ) { this.remembered = new RememberedGrants(storage); }
 
   updateAvailability(): Promise<void> {
     const connection = this.connect();
@@ -129,8 +136,16 @@ export class ProjectTorApiSession<Prepared> {
       : '';
     return {
       inviteCode,
-      grants: [...this.grants.values()].map(({ id, clientName, scope, lastUsedAt }) => ({ id, clientName, scope, lastUsedAt })),
+      grants: project ? this.grantList(project.projectId) : [],
     };
+  }
+
+  private grantList(projectId: string): TorApiGrantInfo[] {
+    const grants = new Map([...this.remembered.list(projectId).values()].map((grant) => [grant.id, grant]));
+    for (const { id, clientName, scope, lastUsedAt } of this.grants.values()) {
+      grants.set(id, { id, clientName, scope, lastUsedAt });
+    }
+    return [...grants.values()];
   }
 
   private invitationCode(instanceId: string, endpoint: string, scope: TorApiScope): string {
@@ -153,13 +168,18 @@ export class ProjectTorApiSession<Prepared> {
   }
 
   revoke(id: string): void {
+    const project = this.readProject();
+    if (project) {
+      for (const [hash, grant] of this.remembered.list(project.projectId)) {
+        if (grant.id === id) this.remembered.remove(project.projectId, hash);
+      }
+    }
     for (const [token, grant] of this.grants) {
       if (grant.id !== id) continue;
       this.grants.delete(token);
       grant.abort.abort();
-      this.changed();
-      break;
     }
+    this.changed();
   }
 
   private connect(): Promise<void> {
@@ -171,7 +191,7 @@ export class ProjectTorApiSession<Prepared> {
       projectId: project.projectId, instanceId: this.createUuid(), geometryRequests: new TorApiGeometryRequests(),
     };
     this.connection = connection;
-    connection.pending = this.bridge.register(connection.instanceId, (request) => this.handle(connection, request), () => {
+    connection.pending = this.bridge.register(connection.instanceId, connection.projectId, (request) => this.handle(connection, request), () => {
       if (this.connection !== connection) return;
       this.invalidate();
       void this.updateAvailability();
@@ -193,12 +213,17 @@ export class ProjectTorApiSession<Prepared> {
 
   private expire(): void {
     const now = Date.now();
+    const projectId = this.connection?.projectId;
     if (this.invite && this.invite.expiresAt <= now) this.clearInvite();
     for (const [token, grant] of this.grants) {
-      if (grant.expiresAt > now) continue;
+      if (grant.expiresAt > now && (!projectId || this.isRememberedGrantCurrent(projectId, grant))) continue;
       this.grants.delete(token);
       grant.abort.abort();
     }
+  }
+
+  private isRememberedGrantCurrent(projectId: string, grant: Grant): boolean {
+    return !grant.rememberedHash || this.remembered.get(projectId, grant.rememberedHash)?.id === grant.id;
   }
 
   private handle(connection: Connection<Prepared>, request: TorApiRequest): TorApiResponse | Promise<TorApiResponse> {
@@ -212,25 +237,45 @@ export class ProjectTorApiSession<Prepared> {
     if (pairing) {
       const input = parsePair(request.body);
       if (!input) return error(400, 'INVALID_REQUEST', 'Invalid Tor API pairing request.');
-      const invite = this.invite;
-      if (!invite || input.invite !== invite.secret) return invalidInvite();
+      const saved = request.credentialHash && this.remembered.get(project.projectId, request.credentialHash);
+      const invite = this.invite?.secret === input.credential ? this.invite : undefined;
+      const scope = saved ? saved.scope : invite?.scope;
+      if (!scope) return invalidInvite();
       if (project.mode === 'pending') return error(503, 'PROJECT_SYNC_PENDING', 'Wait for the project to finish synchronizing.');
       if (!readyForPairing(project)) return error(409, 'PROJECT_BUSY', 'Wait for the current project operation.');
-      if (invite.scope === 'write' && !allowsWrite(project, invite.scope)) {
+      if (!saved && scope === 'write' && !allowsWrite(project, scope)) {
         return error(403, 'READ_ONLY', 'Create a read-only invitation for this shared project.');
       }
-      if (this.grants.size >= MAX_GRANTS) return error(429, 'PAIRING_LIMIT', 'Revoke an old Tor API pairing first.');
+      if (!saved && this.grantList(project.projectId).length >= MAX_GRANTS) {
+        return error(429, 'PAIRING_LIMIT', 'Revoke an old Tor API pairing first.');
+      }
+      const info = saved || {
+        id: this.createUuid(), clientName: input.clientName.trim(), scope, lastUsedAt: now,
+      };
+      const rememberedHash = saved ? request.credentialHash : input.remember;
+      if (rememberedHash) {
+        if (!registration.locator || (!saved && (this.remembered.get(project.projectId, rememberedHash)
+          || !this.remembered.set(project.projectId, rememberedHash, info)))) {
+          return error(503, 'PAIRING_STORAGE_UNAVAILABLE', 'Torquetum could not remember this connection.');
+        }
+        for (const [token, previous] of this.grants) {
+          if (previous.id !== info.id) continue;
+          this.grants.delete(token);
+          previous.abort.abort();
+        }
+      }
       const accessToken = newSecret(instanceId);
       const grant: Grant = {
-        id: this.createUuid(), clientName: input.clientName.trim(), scope: invite.scope, expiresAt: now + GRANT_TTL_MS, lastUsedAt: now,
+        ...info, lastUsedAt: now, expiresAt: now + GRANT_TTL_MS, rememberedHash,
         receipts: new Map(), abort: new AbortController(),
       };
       this.grants.set(accessToken, grant);
-      this.clearInvite();
+      if (invite) this.clearInvite();
       this.changed();
       return { status: 200, body: {
         ...this.info(project, grant.scope, instanceId, maxBodyBytes),
         grantId: grant.id, accessToken, expiresAt: new Date(grant.expiresAt).toISOString(),
+        ...(rememberedHash ? { locator: registration.locator } : {}),
       } };
     }
     const token = request.bearer ?? '';
@@ -250,7 +295,8 @@ export class ProjectTorApiSession<Prepared> {
 
   private accessExchange(connection: Connection<Prepared>, token: string, grant: Grant, access: 'read' | 'write') {
     const project = this.projectFor(connection);
-    if (!project || this.grants.get(token) !== grant || grant.expiresAt <= Date.now()) {
+    if (!project || this.grants.get(token) !== grant || grant.expiresAt <= Date.now()
+      || !this.isRememberedGrantCurrent(project.projectId, grant)) {
       throw new GeometryAccessError(401, 'PAIRING_REQUIRED', 'Pair again with the intended project.');
     }
     if (project.mode === 'pending') {

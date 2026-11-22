@@ -18,8 +18,9 @@ paths:
   /v0.0/pair:
     post:
       operationId: pair
-      summary: Redeem a one-use Project invitation
-      description: Decode the text after `TORAPI.` from unpadded base64url to UTF-8 JSON. Use `endpoint` as the base URL and send `invite` with your `clientName`. Use the returned `accessToken` in the Authorization bearer header on subsequent requests.
+      summary: Exchange a Project invitation or remembered credential for an access token
+      description: |-
+        Decode the text after `TORAPI.` from unpadded base64url to UTF-8 JSON. Use `endpoint` as the base URL and send the `invite` value as `credential`. An initial pairing can include `remember` to register the hash of a client-held reconnect secret. For reconnection, read the live locator and encode its 16-byte instance UUID followed by the same 32-byte secret as unpadded base64url. Use the returned accessToken as a Bearer token for up to eight hours.
       security: []
       requestBody:
         required: true
@@ -27,17 +28,22 @@ paths:
           application/json:
             schema:
               type: object
-              required: [invite, clientName]
+              required: [credential, clientName]
               additionalProperties: false
               properties:
-                invite:
+                credential:
                   type: string
-                  description: The invite value decoded from the Project's pairing code.
+                  pattern: '^[A-Za-z0-9_-]{64}$'
+                  description: An invitation from the pairing code or a reconnect credential for the running Project instance.
                 clientName:
                   type: string
                   minLength: 1
                   maxLength: 80
                   description: At most 80 UTF-16 code units with content after trimming.
+                remember:
+                  type: string
+                  pattern: '^[a-f0-9]{64}$'
+                  description: Lowercase SHA-256 hex digest of a random 32-byte reconnect secret held by the client. Include it with an invitation to remember this grant.
       responses:
         "200":
           description: Grant for one Project instance
@@ -50,9 +56,13 @@ paths:
                     required: [grantId, accessToken, expiresAt]
                     properties:
                       grantId: { type: string, format: uuid }
-                      accessToken: { type: string }
+                      accessToken: { type: string, pattern: '^[A-Za-z0-9_-]{64}$' }
                       expiresAt: { type: string, format: date-time }
-        "401": { $ref: "#/components/responses/Error", description: Invitation invalid or consumed }
+                      locator:
+                        type: string
+                        pattern: '^[a-f0-9]{64}$'
+                        description: Local locator directory for the remembered Project and Studio origin.
+        "401": { $ref: "#/components/responses/Error", description: Credential invalid, consumed, or revoked }
         "409": { $ref: "#/components/responses/Error", description: Project busy }
         default: { $ref: "#/components/responses/Error" }
   /v0.0/project:

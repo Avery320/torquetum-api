@@ -15,7 +15,7 @@ const error = (status: number, code: string) => ({ status, body: { error: { code
 const geometryLimits = { maxBranches: 4, maxPathDepth: 2, maxItems: 8, maxVertices: 16, maxTriangles: 12 };
 const { maxBodyBytes } = bridgeFixture.bootstrap;
 
-async function setup() {
+async function setup(storage?: Storage, projectId = 'source') {
   let etag = '"original"';
   let output: unknown;
   let staged: unknown;
@@ -43,26 +43,26 @@ async function setup() {
   };
   const replace = vi.spyOn(exchange, 'commit');
   const state = {
-    projectId: 'source', projectName: 'Source', busy: false, editing: false,
+    projectId, projectName: 'Source', busy: false, editing: false,
     mode: 'standalone' as ProjectTorApiAccess, exchange: () => exchange,
   };
-  let handler!: Parameters<TorApiBridge['register']>[1];
+  let handler!: Parameters<TorApiBridge['register']>[2];
   const session = new ProjectTorApiSession({
-    register: async (_id, listener) => {
+    register: async (_id, _projectId, listener) => {
       handler = listener;
-      return { endpoint: bridgeFixture.bootstrap.endpoint, maxBodyBytes, unregister() {} };
+      return { endpoint: bridgeFixture.bootstrap.endpoint, maxBodyBytes, locator: 'b'.repeat(64), unregister() {} };
     },
-  }, () => state, () => {}, () => crypto.randomUUID(), geometryLimits);
+  }, () => state, () => {}, () => crypto.randomUUID(), geometryLimits, storage);
   onTestFinished(() => session.dispose());
 
-  async function pair(readOnly = false) {
+  async function pair(readOnly = false, remember?: string) {
     const originalMode = state.mode;
     if (readOnly) state.mode = 'shared-read';
     await session.updateAvailability();
     const code = session.settings().inviteCode.split('.')[1]!;
     const { invite } = JSON.parse(atob(code.replaceAll('-', '+').replaceAll('_', '/')));
     const response = await handler({ route: 'pair', body: bytes({
-      invite, clientName: 'Independent client',
+      credential: invite, clientName: 'Independent client', remember,
     }) });
     state.mode = originalMode;
     expect(response.status).toBe(200);
@@ -98,7 +98,10 @@ async function setup() {
     return resume;
   }
   return {
-    state, get, pair, send, replace, write, read, receipt, written, holdDecode,
+    state, get, pair, send, replace, write, read, receipt, written, holdDecode, session,
+    resume: (credentialHash: string) => handler({
+      route: 'pair', body: bytes({ credential: 'synthetic proof', clientName: 'Reconnect' }), credentialHash,
+    }),
     reconnect: () => { session.invalidate(); return pair(); },
     changeTag: () => { etag = '"new-instance"'; },
     publish: () => { output = staged; },
@@ -182,15 +185,46 @@ it('reads the last published collection independently of staged writes and their
   expect(await app.read(reader)).toEqual({ status: 200, body: collection(1.493) });
 });
 
-it('expires a Project grant and renews pairing against the current Project', async () => {
+it('renews an expired remembered grant across Project restarts and revokes it independently', async () => {
+  const entries = new Map<string, string>();
+  const storage = {
+    get length() { return entries.size; },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => { entries.set(key, value); },
+    removeItem: (key: string) => { entries.delete(key); },
+    clear: () => entries.clear(),
+  } satisfies Storage;
+  const proof = 'a'.repeat(64);
   vi.useFakeTimers({ toFake: ['Date'] });
   try {
-    const app = await setup();
+    const app = await setup(storage);
+    const original = await app.pair(false, proof);
+    expect(original).toMatch(/^[\w-]{64}$/u);
+    const [record] = app.session.settings().grants;
+    expect(record).toBeDefined();
     vi.setSystemTime(Date.now() + 8 * 60 * 60_000);
-    expect(await app.get({ route: 'project' })).toMatchObject(error(401, 'PAIRING_REQUIRED'));
-    const current = await app.reconnect();
-    expect(await app.get({ route: 'project' }, current)).toMatchObject({
-      status: 200, body: { projectId: 'source', canRead: true, canWrite: true },
+    expect(await app.get({ route: 'project' }, original)).toMatchObject(error(401, 'PAIRING_REQUIRED'));
+    app.session.dispose();
+
+    const otherProject = await setup(storage, 'another-project');
+    expect(await otherProject.resume(proof)).toMatchObject(error(401, 'INVITE_INVALID'));
+    const reopened = await setup(storage);
+    expect(await reopened.resume('c'.repeat(64))).toMatchObject(error(401, 'INVITE_INVALID'));
+    reopened.state.mode = 'shared-read';
+    const renewed = await reopened.resume(proof);
+    expect(renewed).toMatchObject({ status: 200, body: {
+      projectId: 'source', grantId: record!.id, locator: 'b'.repeat(64), canRead: true, canWrite: false,
+    } });
+    const current = (renewed.body as { accessToken: string }).accessToken;
+    expect(current).toMatch(/^[\w-]{64}$/u);
+    expect(current).not.toBe(original);
+    expect(await reopened.get({ route: 'project' }, current)).toMatchObject({ status: 200 });
+    reopened.session.revoke(record!.id);
+    expect(await reopened.resume(proof)).toMatchObject(error(401, 'INVITE_INVALID'));
+    expect(await reopened.get({ route: 'project' }, current)).toMatchObject(error(401, 'PAIRING_REQUIRED'));
+    expect(await reopened.get({ route: 'project' })).toMatchObject({
+      status: 200, body: { projectId: 'source', canRead: true },
     });
   } finally {
     vi.useRealTimers();
@@ -221,9 +255,9 @@ it('uses one Studio socket and dispatches a V0.0 request only to its owning Proj
   const owner = vi.fn(() => ({ status: 200, body: fixture.pair.response.body }));
   const other = vi.fn(() => ({ status: 200, body: {} }));
   const disconnected = vi.fn();
-  const first = bridge.register(bridgeFixture.register.instanceId, owner, disconnected);
+  const first = bridge.register(bridgeFixture.register.instanceId, bridgeFixture.register.projectId, owner, disconnected);
   const secondId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
-  const second = bridge.register(secondId, other, disconnected);
+  const second = bridge.register(secondId, 'another-project', other, disconnected);
   await Promise.resolve();
   socket.dispatchEvent(new Event('open'));
   expect(open).toHaveBeenCalledExactlyOnceWith(bridgeFixture.bootstrap.bridgeUrl);
@@ -240,7 +274,7 @@ it('uses one Studio socket and dispatches a V0.0 request only to its owning Proj
   frame.set(header, 4);
   frame.set(body, 4 + header.byteLength);
   socket.receive(frame.buffer);
-  expect(owner).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ route: 'pair', body }));
+  expect(owner).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ route: 'pair', body, credentialHash: bridgeFixture.request.credentialHash }));
   expect(other).not.toHaveBeenCalled();
   await vi.waitFor(() => expect(socket.send.mock.lastCall?.[0]).toBeInstanceOf(Uint8Array));
   socket.close();
