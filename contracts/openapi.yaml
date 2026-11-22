@@ -19,6 +19,7 @@ paths:
     post:
       operationId: pair
       summary: Redeem a one-use Project invitation
+      description: Decode the text after `TORAPI.` from unpadded base64url to UTF-8 JSON. Use `endpoint` as the base URL and send `invite` with your `clientName`. Use the returned `accessToken` in the Authorization bearer header on subsequent requests.
       security: []
       requestBody:
         required: true
@@ -29,7 +30,9 @@ paths:
               required: [invite, clientName]
               additionalProperties: false
               properties:
-                invite: { type: string }
+                invite:
+                  type: string
+                  description: The invite value decoded from the Project's pairing code.
                 clientName:
                   type: string
                   minLength: 1
@@ -56,6 +59,7 @@ paths:
     get:
       operationId: getProject
       summary: Get Project identity, access and exchange readiness
+      description: Check canRead and canWrite before exchanging geometry. The response also lists the supported Geometry Collection kinds and current transfer limits.
       responses:
         "200":
           description: Current Project status
@@ -68,6 +72,7 @@ paths:
     get:
       operationId: listExchangeNodes
       summary: List addressable Asterism inputs and outputs
+      description: Select an exchange node by its configured ID and direction. For a write, use the selected Input's etag as the If-Match header, including the double quotes.
       responses:
         "200":
           description: Exchange node IDs and current Input revisions
@@ -98,21 +103,32 @@ paths:
     put:
       operationId: writeGeometry
       summary: Replace the geometry tree at an Input
+      description: Each write replaces the full Input tree. A 202 response admits the request for processing. Query its Location using the original grant to confirm that the write committed.
       parameters:
         - $ref: "#/components/parameters/NodeId"
         - name: X-Tor-Request-Id
           in: header
           required: true
+          description: A new UUID for each new write. To retry the same write, reuse its grant, UUID, path, headers, and body bytes.
           schema: { type: string, format: uuid }
         - name: If-Match
           in: header
           required: true
+          description: The current ETag of the target Geometry Input, including the double quotes.
           schema: { $ref: "#/components/schemas/StrongTag" }
       requestBody:
         required: true
+        description: A Geometry Collection with at least one geometry item. A branch can contain multiple geometry types.
         content:
           application/json:
             schema: { $ref: "./geometry-collection.schema.json" }
+            examples:
+              basicCollection:
+                summary: Point, curves, plane, box, and mesh
+                externalValue: ../fixtures/geometry-collection-basic.json
+              brepCollection:
+                summary: Basic geometry mixed with CAD faces, shells, and solids
+                externalValue: ../fixtures/geometry-collection.json
       responses:
         "202":
           description: Write admitted or an admitted request replayed
@@ -137,6 +153,7 @@ paths:
     get:
       operationId: getWriteReceipt
       summary: Check an admitted write using its original grant
+      description: Follow Retry-After while the receipt is pending. A committed receipt includes the updated Input ETag. A rejected receipt includes its error under result.error.
       parameters:
         - name: requestId
           in: path
@@ -156,6 +173,7 @@ paths:
     get:
       operationId: readGeometry
       summary: Read a completed Asterism Output
+      description: Read the latest completed result, or include X-Tor-Request-Id to read the result for a specific committed write. That read requires the same grant and an Output that depends on the written Input.
       parameters:
         - $ref: "#/components/parameters/NodeId"
         - name: X-Tor-Request-Id
@@ -206,6 +224,7 @@ components:
     NodeId:
       type: string
       pattern: "^[A-Za-z0-9_-]+$"
+      description: The configured case-sensitive ID of a Geometry Input or Geometry Output, unique within its direction.
     StrongTag:
       type: string
       pattern: '^"[!#-~]*"$'
@@ -222,11 +241,13 @@ components:
           enum: [PROJECT_NOT_RUNNING, PROJECT_SYNC_PENDING, PROJECT_BUSY, READ_ONLY]
         kinds:
           type: array
+          description: Accepted kind values for items in a Geometry Collection.
           items: { type: string }
         mediaTypes:
           const: [application/json]
         limits:
           type: object
+          description: Current limits for the request body and the collection's branches, path depth, items, vertices, and triangles.
           required: [maxBodyBytes, maxBranches, maxPathDepth, maxItems, maxVertices, maxTriangles]
           properties:
             maxBodyBytes: { type: integer, minimum: 1 }
@@ -271,8 +292,14 @@ components:
         message: { type: string }
         requestId: { type: string, format: uuid }
         reason: { type: string }
-        field: { type: string }
+        field:
+          type: string
+          description: The invalid field or field path, when available.
         path:
           type: array
+          description: The branch path of the invalid item, when available.
           items: { type: integer, minimum: 0 }
-        itemIndex: { type: integer, minimum: 0 }
+        itemIndex:
+          type: integer
+          minimum: 0
+          description: The zero-based item index in that branch, including null slots.

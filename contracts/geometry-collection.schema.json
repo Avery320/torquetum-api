@@ -1,14 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Tor API Geometry Collection",
-  "description": "Geometry in Torquetum project space and metres, preserving branch paths and item positions.",
+  "description": "The geometry tree used for Asterism Input writes and Output reads. A write requires at least one geometry item.",
   "type": "object",
   "required": ["schemaVersion", "units", "space", "branches"],
   "additionalProperties": false,
   "properties": {
     "schemaVersion": { "const": "0.0" },
-    "units": { "const": "m" },
-    "space": { "const": "project" },
+    "units": { "const": "m", "description": "Coordinates and lengths are in metres. Embedded STEP uses the units declared in its text." },
+    "space": { "const": "project", "description": "Right-handed, Z-up Project world coordinates." },
     "branches": {
       "type": "array",
       "items": {
@@ -18,11 +18,13 @@
         "properties": {
           "path": {
             "type": "array",
+            "description": "A branch path unique within this Collection. Readback sorts branches by path.",
             "minItems": 1,
             "items": { "$ref": "#/$defs/nonnegativeInt32" }
           },
           "items": {
             "type": "array",
+            "description": "Ordered items of mixed geometry types. A null item preserves a slot and an empty array preserves the branch.",
             "items": {
               "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/geometry" }]
             }
@@ -35,23 +37,26 @@
     "nonnegativeInt32": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
     "vec3": {
       "type": "array",
+      "description": "Three finite components in X, Y, Z order.",
       "minItems": 3,
       "maxItems": 3,
       "items": { "type": "number" }
     },
     "interval": {
       "type": "array",
+      "description": "A finite, strictly increasing interval.",
       "minItems": 2,
       "maxItems": 2,
       "items": { "type": "number" }
     },
     "planeFrame": {
       "type": "object",
+      "description": "A plane frame with a nonzero normal and a nonzero, nonparallel reference X direction.",
       "required": ["origin", "normal", "direction"],
       "properties": {
         "origin": { "$ref": "#/$defs/vec3" },
-        "normal": { "$ref": "#/$defs/vec3" },
-        "direction": { "$ref": "#/$defs/vec3" }
+        "normal": { "$ref": "#/$defs/vec3", "description": "The plane normal." },
+        "direction": { "$ref": "#/$defs/vec3", "description": "The reference direction for the plane's X axis." }
       }
     },
     "geometry": {
@@ -62,6 +67,7 @@
       },
       "oneOf": [
         {
+          "title": "Point",
           "required": ["position"],
           "properties": {
             "kind": { "const": "point" },
@@ -69,32 +75,39 @@
           }
         },
         {
+          "title": "Line",
+          "description": "A straight curve with distinct endpoints.",
           "required": ["start", "end"],
           "properties": {
             "kind": { "const": "line" },
             "start": { "$ref": "#/$defs/vec3" },
             "end": { "$ref": "#/$defs/vec3" },
-            "domain": { "$ref": "#/$defs/interval" }
+            "domain": { "$ref": "#/$defs/interval", "description": "Curve parameter range. Defaults to [0, 1] when omitted." }
           }
         },
         {
+          "title": "Polyline",
           "required": ["points", "closed"],
           "properties": {
             "kind": { "const": "polyline" },
             "points": {
               "type": "array",
+              "description": "Ordered vertices with distinct consecutive points. A closed polyline needs at least three distinct vertices and omits the repeated closing vertex.",
               "minItems": 2,
               "items": { "$ref": "#/$defs/vec3" }
             },
             "closed": { "type": "boolean" },
-            "domain": { "$ref": "#/$defs/interval" }
+            "domain": { "$ref": "#/$defs/interval", "description": "Curve parameter range. Defaults to 0 through the number of segments." }
           }
         },
         {
+          "title": "Plane",
           "$ref": "#/$defs/planeFrame",
           "properties": { "kind": { "const": "plane" } }
         },
         {
+          "title": "Box",
+          "description": "The x, y, and z intervals are measured along the local axes of plane.",
           "required": ["plane", "x", "y", "z"],
           "properties": {
             "kind": { "const": "box" },
@@ -105,6 +118,7 @@
           }
         },
         {
+          "title": "Mesh",
           "required": ["positions", "triangles"],
           "properties": {
             "kind": { "const": "triangle-mesh" },
@@ -115,6 +129,7 @@
             },
             "triangles": {
               "type": "array",
+              "description": "Triangle faces with positive area. Each face contains three zero-based indices into positions.",
               "minItems": 1,
               "items": {
                 "type": "array",
@@ -126,11 +141,19 @@
           }
         },
         {
+          "title": "Surface and BRep",
           "required": ["shapeType", "step"],
           "properties": {
             "kind": { "const": "brep-step" },
-            "shapeType": { "enum": ["face", "shell", "solid"] },
-            "step": { "type": "string", "pattern": "^\\s*ISO-10303-21;" }
+            "shapeType": {
+              "enum": ["face", "shell", "solid"],
+              "description": "A face, shell, or solid. The declaration must match the imported shape."
+            },
+            "step": {
+              "type": "string",
+              "description": "Complete STEP Part 21 text for one connected CAD shape.",
+              "pattern": "^\\s*ISO-10303-21;"
+            }
           }
         }
       ],

@@ -2,7 +2,9 @@
 
 [繁體中文](README.md) · English
 
-Local HTTP API for Torquetum Project access and Asterism geometry exchange. This repository contains the [OpenAPI V0.0 contract](contracts/openapi.yaml), [Geometry Collection schema](contracts/geometry-collection.schema.json) and the Rust and TypeScript code used by Torquetum to serve the API. Native clients connect to a running Torquetum Project over HTTP. [Alidade](https://github.com/Avery320/alidade) is the Grasshopper connector.
+The local HTTP API provides Project pairing, status queries, and Asterism geometry exchange. This repository contains the OpenAPI V0.0 contract, the Geometry Collection JSON Schema, and the Rust and TypeScript code that Torquetum uses to serve the API. External applications connect to a running Torquetum Project over HTTP. [OpenAPI contract](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Alidade for Grasshopper](https://github.com/Avery320/alidade)
+
+Use your own geometry source and HTTP client. Convert the source geometry to a Geometry Collection and use the pairing grant to send it to the chosen Asterism Input ID. Torquetum validates the collection, updates the Input, evaluates downstream nodes, and makes the Output available to read. This repository provides the contracts, JSON samples, and a runnable Python example. [Geometry format](#geometry)
 
 ## API overview
 
@@ -17,10 +19,10 @@ Local HTTP API for Torquetum Project access and Asterism geometry exchange. This
 
 ## Quick start
 
-Run a V0.0-capable Torquetum Desktop app or local `torquetum-server` on the same computer as the client. If you have access to the Torquetum source repository, follow its development setup to initialize the submodule and install dependencies. Build Studio with `pnpm --filter @torquetum/studio build`, run `cargo run -p torquetum-server` and open the URL printed by the server. [Torquetum development setup](https://github.com/Avery320/torquetum#開發環境)
+Run Torquetum Desktop or local Web served by `torquetum-server` on the same computer as the client. Use a version that supports Torquetum API V0.0.
 
 1. Open a standalone test Project in Studio. In Asterism, wire a **Geometry Input** directly to a **Geometry Output**. Enable both and set both **ID** fields to `fixture`.
-2. Copy the pairing code from **Project Settings → External Connections** for that Project.
+2. In **Project Settings → External Connections** for that Project, select **Copy** next to **Pairing code**.
 3. Clone the API repository, run the Python example and paste the code at its prompt. [Python example](examples/python/asterism-exchange-smoke.py)
 
    ```sh
@@ -29,48 +31,65 @@ Run a V0.0-capable Torquetum Desktop app or local `torquetum-server` on the same
    python3 examples/python/asterism-exchange-smoke.py fixture fixture
    ```
 
-The script uses the Python 3 standard library. It replaces the test Input tree twice, reads back the exact revisions and checks retry and stale-version handling. A successful run prints `Verified two revisions of the same Asterism input, exact output reads and idempotent retries.`
+The script uses the Python 3 standard library. It updates the test Input twice with different coordinates for the same point, reads back the exact revisions, and checks retry and stale-version handling. A successful run prints `Verified two revisions of the same Asterism input, exact output reads and idempotent retries.`
 
 ## Make HTTP requests
 
-Use the Quick start test nodes and copy a fresh pairing code from the same Project. Decode the part after `TORAPI.` as unpadded base64url UTF-8 JSON to obtain `endpoint` and `invite`. Send every request to the `http://127.0.0.1:<port>` in `endpoint`. An invitation is usable once. Copy a fresh code when an invitation expires or a grant becomes unavailable.
+Use the Quick start test nodes. Run these commands in order from the API repository root in the same shell. They use `curl` and Python 3.
 
-1. **Get a grant.** Send `{"invite":"<invite>","clientName":"Point example"}` to `POST /v0.0/pair` with `Content-Type: application/json`. Use the returned `accessToken` in `Authorization: Bearer <accessToken>` for every subsequent request. Use `GET /v0.0/project` to check Project status, `canWrite` and transfer limits. [Example pairing request and response](fixtures/connection.json)
-2. **Get the Input revision.** Call `GET /v0.0/asterism/ports` and find the item with `direction` equal to `input` and `id` equal to `fixture`. Use its decoded `etag` string as `If-Match`, including the double quotes, as in `"input-v1"`.
-3. **Send a point.** The following request replaces the `fixture` Input tree. Substitute the actual port, token and ETag and create a new UUID for each new write. The point is at `[1, 0, 0]` in Project world coordinates, measured in metres.
+Copy a fresh pairing code from the same Project. Decode the part after `TORAPI.` from unpadded base64url to UTF-8 JSON, then read `endpoint` and `invite`. Send every request to the `http://127.0.0.1:<port>` in `endpoint`. Each code can be used once. Copy a fresh code if the invitation expires or the grant becomes unavailable. [Pairing code decoder](examples/python/asterism-exchange-smoke.py)
 
-   ```http
-   PUT /v0.0/asterism/inputs/fixture HTTP/1.1
-   Host: 127.0.0.1:<port>
-   Authorization: Bearer <accessToken>
-   Content-Type: application/json
-   If-Match: "input-v1"
-   X-Tor-Request-Id: bd9499c5-0552-4309-87bf-cdbe9217d48e
+1. **Get a grant.** Replace the example URL and `<invite>` with the decoded values. Copy the `accessToken` from the successful response. [Pairing request and response sample](fixtures/connection.json)
 
-   {
-     "schemaVersion": "0.0",
-     "units": "m",
-     "space": "project",
-     "branches": [{"path": [0], "items": [{"kind": "point", "position": [1, 0, 0]}]}]
-   }
+   ```sh
+   tor_endpoint='http://127.0.0.1:44555'
+   curl --noproxy '*' -sS "$tor_endpoint/v0.0/pair" \
+     -H 'Content-Type: application/json' \
+     --data '{"invite":"<invite>","clientName":"Geometry example"}'
    ```
 
-4. **Check the write.** `202 Accepted` confirms admission. Use the same grant to send `GET` to the relative `Location` on the same host.
+2. **Check Project status and the Input revision.** Set the actual `accessToken`. Check `canWrite` before writing, and read supported geometry types and transfer limits from `kinds` and `limits`. In the node list, find the item with `direction` equal to `input` and `id` equal to `fixture`. Use its decoded `etag` string, including the surrounding double quotes.
 
-   ```http
-   HTTP/1.1 202 Accepted
-   Content-Type: application/json
-   Location: /v0.0/requests/bd9499c5-0552-4309-87bf-cdbe9217d48e
-   Retry-After: 1
-
-   {"requestId": "bd9499c5-0552-4309-87bf-cdbe9217d48e"}
+   ```sh
+   tor_token='<accessToken>'
+   curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
+     -H "Authorization: Bearer $tor_token"
+   curl --noproxy '*' -sS "$tor_endpoint/v0.0/asterism/ports" \
+     -H "Authorization: Bearer $tor_token"
    ```
 
-   Follow `Retry-After` while the receipt is `pending`. Read `result.error` if it is `rejected`. A `committed` receipt confirms the Input was updated, and `result.etag` gives its new revision.
+3. **Send mixed geometry.** Set the ETag you just looked up. Use a new UUID for each new write. The command sends the JSON sample directly to the `fixture` Input and replaces its full tree. The sample contains a point, a line, a polyline, a plane, a box, and a mesh. [Basic collection sample](fixtures/geometry-collection-basic.json)
 
-5. **Read this write's result.** Call `GET /v0.0/asterism/outputs/fixture` with the same `X-Tor-Request-Id`. A `409 OUTPUT_NOT_READY` means Asterism is still evaluating. Retry the read after a short wait. A successful read returns the tree containing the same point, and its `ETag` matches the receipt's `result.etag`. A newer revision replacing the Input returns `INPUT_SUPERSEDED`. `OUTPUT_UNAVAILABLE` means the result has no usable geometry.
+   ```sh
+   tor_etag='"input-v1"'
+   tor_request_id=$(python3 -c 'from uuid import uuid4; print(uuid4())')
+   curl --noproxy '*' -sS -i -X PUT "$tor_endpoint/v0.0/asterism/inputs/fixture" \
+     -H "Authorization: Bearer $tor_token" \
+     -H 'Content-Type: application/json' \
+     -H "If-Match: $tor_etag" \
+     -H "X-Tor-Request-Id: $tor_request_id" \
+     --data-binary @fixtures/geometry-collection-basic.json
+   ```
 
-Retry an uncertain write with the same UUID, path, headers and body bytes. Input and Output IDs can be set independently. Use letters, numbers, hyphens or underscores. IDs are case-sensitive and unique within each direction.
+4. **Check the write.** `202 Accepted` means the write was accepted for processing. Set `tor_receipt` to the full relative path from the response's `Location` header and check the receipt using the original grant. For `pending`, wait the number of seconds in `Retry-After` and check again. A `committed` receipt confirms that the Input was updated, and `result.etag` gives its new revision. For `rejected`, inspect `result.error`. Geometry validation errors can include `path`, `itemIndex`, and `field`.
+
+   ```sh
+   tor_receipt='/v0.0/requests/<requestId>'
+   curl --noproxy '*' -sS -i "$tor_endpoint$tor_receipt" \
+     -H "Authorization: Bearer $tor_token"
+   ```
+
+5. **Read the result of this write.** Read the Output that depends on that Input and send the same `X-Tor-Request-Id`. Retry the read if `409 OUTPUT_NOT_READY` indicates that Asterism is still evaluating. `INPUT_SUPERSEDED` means a newer write replaced this Input revision. `OUTPUT_UNAVAILABLE` means there is no usable geometry. A successful response contains a Geometry Collection with an `ETag` matching the receipt's `result.etag`. In the sample, branch `[0]` contains the point `[1, 2, 3]` metres, and branch `[3, 0, 7]` contains a triangle mesh.
+
+   ```sh
+   curl --noproxy '*' -sS -i "$tor_endpoint/v0.0/asterism/outputs/fixture" \
+     -H "Authorization: Bearer $tor_token" \
+     -H "X-Tor-Request-Id: $tor_request_id"
+   ```
+
+Replace the sample JSON with your own Collection and update the URLs to match the connected nodes. Use each Input or Output node's **ID**. IDs accept ASCII letters, digits, hyphens, and underscores. They are case-sensitive and unique within each direction. To read the latest completed Output, omit `X-Tor-Request-Id`.
+
+If a write's outcome is unknown, keep the original grant, UUID, URL, headers, and JSON bytes, and rerun just the `curl` command from step 3. For `412 STALE_REVISION`, fetch the current Input ETag and decide whether to submit a new write with a new UUID.
 
 Native clients connect directly with redirects, proxies and cookies disabled. The host checks the peer and `Host` and rejects browser `Origin` on native routes. Pairing works from a draft. Open the same Project in Studio before exchanging geometry. A standalone Project supports reads and writes. A LAN Project supports reads after synchronization. [Full HTTP contract](contracts/openapi.yaml)
 
@@ -78,11 +97,25 @@ Each write replaces the full Input tree and queues Asterism evaluation. An inval
 
 ## Geometry
 
-The tree uses `schemaVersion: "0.0"`, Project world coordinates and metres. Branch paths, item order, null slots and empty branches are preserved. The collection can mix points, lines, polylines, planes, boxes, triangle meshes and exact STEP faces, shells or solids.
+Input writes and Output reads use the same Geometry Collection format. The top-level fields are `schemaVersion: "0.0"`, `units: "m"`, `space: "project"`, and `branches`. Coordinates use the right-handed, Z-up Project world frame. Coordinates and lengths are in metres and must be finite.
 
-Each STEP item represents one connected shape. The receiver checks its declared type and uses the declared STEP units. Torquetum preserves the exact source geometry and prepares a tessellation for viewing. For unsupported items or invalid dimensions, inspect the branch and item location in the error. Transfer limits are advertised by the paired Project.
+Each branch has a `path` and `items`. A path is a nonempty array of nonnegative integers, such as `[0, 4]`, and is unique within the Collection. The items can mix geometry types. On readback, branches are sorted by path, and the order of items, `null` slots, and empty branches are preserved. An Input write requires at least one geometry item.
 
-Use the synthetic [connection example](fixtures/connection.json), [basic collection](fixtures/geometry-collection-basic.json) and [mixed STEP collection](fixtures/geometry-collection.json) to check client payloads. For Rhino geometry conversion and Grasshopper instructions, see the [Alidade guide](https://github.com/Avery320/alidade#readme).
+| Geometry | JSON `kind` | Fields and constraints |
+| --- | --- | --- |
+| Point | `point` | `position` is an XYZ coordinate `[x, y, z]`. |
+| Line (Curve) | `line` | `start` and `end` are distinct XYZ coordinates. Optional `domain: [t0, t1]` is strictly increasing and defaults to `[0, 1]`. |
+| Polyline (Curve) | `polyline` | `points` contains ordered XYZ coordinates and `closed` is a boolean. Consecutive points must differ. An open polyline needs at least two points, and a closed polyline needs at least three distinct points with the repeated closing point omitted. Optional `domain: [t0, t1]` is strictly increasing and defaults to 0 through the number of segments. |
+| Plane | `plane` | `origin` is an XYZ position, `normal` is the plane normal, and `direction` is the reference X direction. Both vectors must be nonzero and nonparallel. |
+| Box | `box` | `plane` contains `origin`, `normal`, and `direction`. Supply a strictly increasing `[min, max]` range for each of `x`, `y`, and `z` along the plane's local axes. |
+| Mesh | `triangle-mesh` | `positions` contains at least three XYZ vertices and `triangles` contains at least one face. Each face has three valid zero-based vertex indices and a positive area. |
+| Surface and BRep | `brep-step` | Set `shapeType` to `face` for a single face, `shell` for a shell, or `solid` for a solid. Supply the complete STEP Part 21 text for one connected shape in `step`. |
+
+- Curve exchange supports lines and polylines. Standalone circles, arcs, and general NURBS curves have no exchange type in V0.0.
+- Meshes carry vertices and triangle faces. Triangulate quads or polygons in the source before writing the indices.
+- For BRep, the receiver checks that the shape matches `shapeType` and uses the units declared in the STEP file. Torquetum keeps the exact CAD shape and prepares a mesh for display.
+
+Use the samples below as a starting point for your own Collection. For Rhino geometry conversion and Grasshopper instructions, see the Alidade guide. [Basic collection](fixtures/geometry-collection-basic.json) · [Mixed BRep collection](fixtures/geometry-collection.json) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Alidade guide](https://github.com/Avery320/alidade#readme)
 
 ## Structure
 
@@ -107,6 +140,8 @@ cargo test --manifest-path rust/Cargo.toml --locked
 ```
 
 The unit tests exercise the host and session with fixtures. Run the Quick start against a Torquetum Project to verify the full HTTP exchange. The first API import comes from Torquetum commit `942ddd33307966e8b6cbe1b2ad8ed5856c454feb`.
+
+If you have access to the Torquetum source repository, follow its development setup to initialize the submodule and install dependencies. Then run `pnpm --filter @torquetum/studio build` and `cargo run -p torquetum-server` to start local Web. [Torquetum development setup](https://github.com/Avery320/torquetum#開發環境)
 
 ## License
 
