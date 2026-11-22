@@ -54,11 +54,11 @@ def until_ready(probe, message):
 
 
 def smoke(input_selector, output_selector):
-    """Replace the test Input twice to verify exact readback, replay, and superseded revisions."""
+    """Stage two revisions and read them after the corresponding Asterism actions."""
     port, invite = invitation()
     token = None
 
-    def request(method, path, *, body=None, headers=None, expected=200, pending=None):
+    def request(method, path, *, body=None, headers=None, expected=200):
         fields = dict(headers or {})
         if token:
             fields["Authorization"] = f"Bearer {token}"
@@ -70,8 +70,6 @@ def smoke(input_selector, output_selector):
             raw = response.read(limit + 1)
             require(len(raw) <= limit, "Response exceeds the geometry transport limit.")
             data = json.loads(raw) if raw else {}
-            if pending and (response.status, data.get("error", {}).get("code")) == pending:
-                return None
             code = data.get("error", {}).get("code", "")
             detail = f" {code}" if isinstance(code, str) and re.fullmatch(r"[A-Z][A-Z_0-9]{0,71}", code) else ""
             require(response.status == expected, f"{method} returned HTTP {response.status}{detail}.")
@@ -103,9 +101,9 @@ def smoke(input_selector, output_selector):
         input_path = "/asterism/inputs/" + quote(source["id"], safe="")
         output_path = "/asterism/outputs/" + quote(target["id"], safe="")
         etag = source["etag"]
-        previous_id = None
+        previous = None
 
-        for x in (1, 2):
+        for x in (1, 1.493):
             request_id = str(uuid4())
             tree = geometry(x)
             headers = {"If-Match": etag, REQUEST_ID: request_id}
@@ -120,25 +118,17 @@ def smoke(input_selector, output_selector):
             require(result["etag"] != etag, "A committed input replacement must change its revision.")
             etag = result["etag"]
             require(select(ports(), "input", source["id"])["etag"] == etag, "Discovery returned a stale input revision.")
-            if previous_id is not None:
-                superseded, _ = request(
-                    "GET", output_path, headers={REQUEST_ID: previous_id}, expected=409,
-                )
-                require(superseded["error"]["code"] == "INPUT_SUPERSEDED", "A newer write did not supersede the old output.")
-            # Asterism can keep evaluating the Output after the Input is committed.
-            output, reply_headers = until_ready(
-                lambda: request(
-                    "GET", output_path, headers={REQUEST_ID: request_id}, pending=(409, "OUTPUT_NOT_READY"),
-                ),
-                "The connected graph output did not finish.",
-            )
-            require(output == tree, "The completed output differs from the requested input tree.")
-            require(reply_headers.get("ETag") == etag, "The completed output did not verify the receipt's Input version.")
+            if previous is not None:
+                require(request("GET", output_path)[0] == previous, "Staging an Input changed the published Output.")
+
+            input("In Asterism, press Read on the Input and Send on the Output, then press Enter. ")
+            output, _ = request("GET", output_path)
+            require(output == tree, "The published Output differs from the staged Input.")
             _, reply_headers = request("PUT", input_path, body=tree, headers=headers, expected=202)
             require(reply_headers.get("Location") == location and read_receipt(path) == receipt, "Retry did not reuse the original receipt.")
             stale, _ = request("PUT", input_path, body=tree, headers={**headers, REQUEST_ID: str(uuid4())}, expected=412)
             require(stale["error"]["code"] == "STALE_REVISION", "A stale write was not rejected.")
-            previous_id = request_id
+            previous = output
 
 
 def main():
@@ -152,7 +142,7 @@ def main():
         sys.exit(str(error))
     except (ValueError, TypeError, KeyError, AttributeError, HTTPException, OSError, EOFError):
         sys.exit("Could not read a valid invitation or response from the local Torquetum API.")
-    print("Verified two revisions of the same Asterism input, exact output reads and idempotent retries.")
+    print("Verified two manual exchanges using the same IDs and idempotent write retries.")
 
 
 if __name__ == "__main__":

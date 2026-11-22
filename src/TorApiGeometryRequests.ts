@@ -26,11 +26,11 @@ interface CommittedInput {
 
 export interface TorApiGeometryExchange<Prepared> {
   list(): unknown;
-  read(portId: string, signal: AbortSignal, expected?: CommittedInput): Promise<unknown>;
+  read(portId: string): unknown;
   checkWrite(portId: string, ifMatch: string): void;
-  /** Decode and validate the candidate tree. Applying it to the Input belongs to commit. */
+  /** Decode and validate the tree before staging it for an Asterism Read. */
   prepare(intent: GeometryWriteIntent, signal: AbortSignal): Promise<Prepared>;
-  /** Recheck the Input revision and replace its tree synchronously. */
+  /** Recheck the Input revision and replace the staged tree synchronously. */
   commit(intent: GeometryWriteIntent, prepared: Prepared): CommittedInput;
 }
 
@@ -59,17 +59,6 @@ function requireReceipt(receipt: Receipt | undefined): Receipt {
   return receipt;
 }
 
-function committedInput(receipt: Receipt | undefined) {
-  const { result } = requireReceipt(receipt);
-  if (!result) {
-    throw new GeometryAccessError(409, 'OUTPUT_NOT_READY', 'Wait for the geometry write to finish.');
-  }
-  if ('error' in result) {
-    throw new GeometryAccessError(409, 'REQUEST_REJECTED', 'This geometry write was rejected.');
-  }
-  return result;
-}
-
 function geometryError(cause: unknown, requestId?: string): TorApiResponse & { body: { error: ErrorDetail } } {
   const known = cause instanceof GeometryAccessError;
   return {
@@ -86,26 +75,15 @@ function geometryError(cause: unknown, requestId?: string): TorApiResponse & { b
 export class TorApiGeometryRequests<Prepared> {
   private busy = false;
 
-  async handle(
+  handle(
     request: TorApiRequest, access: AccessGeometry<Prepared>,
     { receipts, abort: { signal } }: CollectionAccess,
-  ): Promise<TorApiResponse> {
+  ): TorApiResponse {
     try {
       if (request.route === 'asterism-ports') return { status: 200, body: access('read').list() };
       if (request.route === 'asterism-output' && request.portId) {
-        const timeout = AbortSignal.timeout(59_000);
-        const geometry = access('read');
-        const expected = request.requestId ? committedInput(receipts.get(request.requestId)) : undefined;
-        try {
-          const collection = await geometry.read(request.portId, AbortSignal.any([signal, timeout]), expected);
-          // Export can outlive the Project or grant that authorized it.
-          access('read');
-          return { status: 200, body: collection, ...(expected ? { etag: expected.etag } : {}) };
-        } catch (error) {
-          if (signal.aborted) access('read');
-          if (timeout.aborted) throw new GeometryAccessError(503, 'BRIDGE_UNAVAILABLE', 'Geometry export took too long.');
-          throw error;
-        }
+        if (request.requestId) throw new GeometryAccessError(400, 'INVALID_REQUEST', 'Output reads use the Output ID.');
+        return { status: 200, body: access('read').read(request.portId) };
       }
       const id = request.requestId;
       if (!id) throw new GeometryAccessError(400, 'INVALID_REQUEST', 'A request ID is required.');

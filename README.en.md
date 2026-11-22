@@ -13,57 +13,66 @@ Use your own geometry source and HTTP client. Convert the source geometry to a G
 | `POST` | `/v0.0/pair` | Redeem a one-use pairing invitation for a Project `accessToken`. |
 | `GET` | `/v0.0/project` | Get the Project identity, read and write permissions, exchange readiness, and transfer limits. |
 | `GET` | `/v0.0/asterism/ports` | List addressable Geometry Input and Geometry Output IDs and the ETag of each Input. |
-| `PUT` | `/v0.0/asterism/inputs/{id}` | Replace the full geometry tree at an Input. The response to an accepted write includes the receipt location. |
+| `PUT` | `/v0.0/asterism/inputs/{id}` | Stage a full geometry tree for the Input to apply when the user presses Read. An accepted write includes the receipt location. |
 | `GET` | `/v0.0/requests/{requestId}` | Use the original write grant to check whether the receipt is `pending`, `committed`, or `rejected`. |
-| `GET` | `/v0.0/asterism/outputs/{id}` | Read the completed geometry tree at an Output. Include `X-Tor-Request-Id` to read the result for a specific write. |
+| `GET` | `/v0.0/asterism/outputs/{id}` | Read the geometry tree most recently published using Send on the Output. |
 
 ## Quick start
 
-Run Torquetum Desktop or local Web served by `torquetum-server` on the same computer as the client. Use a version that supports Torquetum API V0.0.
+Run Torquetum Desktop or local Web served by `torquetum-server` on the same computer as the client, and open the Project in Studio. Use a version that supports Torquetum API V0.0. Sending and reading share one pairing grant and can be used independently.
 
-1. Open a standalone test Project in Studio. In Asterism, wire a **Geometry Input** directly to a **Geometry Output**. Enable both and set both **ID** fields to `fixture`.
-2. In **Project Settings → External Connections** for that Project, select **Copy** next to **Pairing code**.
-3. Clone the API repository, run the Python example and paste the code at its prompt. [Python example](examples/python/asterism-exchange-smoke.py)
+- **To send only**, add a **Geometry Input** from **Exchange** in Asterism. [Send geometry](#send-geometry)
+- **To read only**, add a **Geometry Output** from **Exchange** and connect the geometry to it. [Read geometry](#read-geometry)
+
+Input and Output IDs can be set independently. They accept ASCII letters, digits, hyphens, and underscores and are case-sensitive and unique within each direction.
+
+The commands below use `curl`, Python 3, and samples from this repository. Run them in the same shell.
+
+```sh
+git clone https://github.com/Avery320/torquetum-api.git
+cd torquetum-api
+```
+
+### Pair the Project
+
+In **Project Settings → External Connections**, select **Copy** next to **Pairing code**. Decode the part after `TORAPI.` from unpadded base64url to UTF-8 JSON, then read `endpoint` and `invite`. Send every request to the `http://127.0.0.1:<port>` in `endpoint`. Each code can be used once. Copy a fresh code if the invitation expires or the grant becomes unavailable. [Pairing code decoder](examples/python/asterism-exchange-smoke.py)
+
+Replace the example URL and `<invite>` with the decoded values, then take the `accessToken` from the successful response. [Pairing request and response sample](fixtures/connection.json)
+
+```sh
+tor_endpoint='http://127.0.0.1:44555'
+curl --noproxy '*' -sS "$tor_endpoint/v0.0/pair" \
+  -H 'Content-Type: application/json' \
+  --data '{"invite":"<invite>","clientName":"Geometry example"}'
+```
+
+Set `tor_token` to the returned `accessToken` and use it for either direction. Query `GET /v0.0/project` to check `canRead`, `canWrite`, the supported geometry `kinds`, and transfer `limits`.
+
+```sh
+tor_token='<accessToken>'
+curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
+  -H "Authorization: Bearer $tor_token"
+```
+
+Native clients connect directly with redirects, proxies and cookies disabled. The host checks the peer and `Host` and rejects browser `Origin` on native routes. Pairing works from a draft. Open the same Project in Studio before exchanging geometry. A standalone Project supports reads and writes. A LAN Project supports reads after synchronization. [Full HTTP contract](contracts/openapi.yaml)
+
+## Send geometry
+
+In a standalone Project, add a **Geometry Input** in Asterism and set its **ID** to `source`. Send a Collection to that ID. After the write commits, press **Read** to apply it to the graph.
+
+1. **Get the Input revision.** Find the item with `direction` equal to `input` and `id` equal to `source` in the node list. Use its decoded `etag` string, including the surrounding double quotes.
 
    ```sh
-   git clone https://github.com/Avery320/torquetum-api.git
-   cd torquetum-api
-   python3 examples/python/asterism-exchange-smoke.py fixture fixture
-   ```
-
-The script uses the Python 3 standard library. It updates the test Input twice with different coordinates for the same point, reads back the exact revisions, and checks retry and stale-version handling. A successful run prints `Verified two revisions of the same Asterism input, exact output reads and idempotent retries.`
-
-## Make HTTP requests
-
-Use the Quick start test nodes. Run these commands in order from the API repository root in the same shell. They use `curl` and Python 3.
-
-Copy a fresh pairing code from the same Project. Decode the part after `TORAPI.` from unpadded base64url to UTF-8 JSON, then read `endpoint` and `invite`. Send every request to the `http://127.0.0.1:<port>` in `endpoint`. Each code can be used once. Copy a fresh code if the invitation expires or the grant becomes unavailable. [Pairing code decoder](examples/python/asterism-exchange-smoke.py)
-
-1. **Get a grant.** Replace the example URL and `<invite>` with the decoded values. Copy the `accessToken` from the successful response. [Pairing request and response sample](fixtures/connection.json)
-
-   ```sh
-   tor_endpoint='http://127.0.0.1:44555'
-   curl --noproxy '*' -sS "$tor_endpoint/v0.0/pair" \
-     -H 'Content-Type: application/json' \
-     --data '{"invite":"<invite>","clientName":"Geometry example"}'
-   ```
-
-2. **Check Project status and the Input revision.** Set the actual `accessToken`. Check `canWrite` before writing, and read supported geometry types and transfer limits from `kinds` and `limits`. In the node list, find the item with `direction` equal to `input` and `id` equal to `fixture`. Use its decoded `etag` string, including the surrounding double quotes.
-
-   ```sh
-   tor_token='<accessToken>'
-   curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
-     -H "Authorization: Bearer $tor_token"
    curl --noproxy '*' -sS "$tor_endpoint/v0.0/asterism/ports" \
      -H "Authorization: Bearer $tor_token"
    ```
 
-3. **Send mixed geometry.** Set the ETag you just looked up. Use a new UUID for each new write. The command sends the JSON sample directly to the `fixture` Input and replaces its full tree. The sample contains a point, a line, a polyline, a plane, a box, and a mesh. [Basic collection sample](fixtures/geometry-collection-basic.json)
+2. **Send mixed geometry.** Set the ETag you just looked up. Use a new UUID for each new write. The command sends the JSON sample directly to the `source` Input and replaces its full tree. The sample contains a point, a line, a polyline, a plane, a box, and a mesh. [Basic collection sample](fixtures/geometry-collection-basic.json)
 
    ```sh
    tor_etag='"input-v1"'
    tor_request_id=$(python3 -c 'from uuid import uuid4; print(uuid4())')
-   curl --noproxy '*' -sS -i -X PUT "$tor_endpoint/v0.0/asterism/inputs/fixture" \
+   curl --noproxy '*' -sS -i -X PUT "$tor_endpoint/v0.0/asterism/inputs/source" \
      -H "Authorization: Bearer $tor_token" \
      -H 'Content-Type: application/json' \
      -H "If-Match: $tor_etag" \
@@ -71,7 +80,7 @@ Copy a fresh pairing code from the same Project. Decode the part after `TORAPI.`
      --data-binary @fixtures/geometry-collection-basic.json
    ```
 
-4. **Check the write.** `202 Accepted` means the write was accepted for processing. Set `tor_receipt` to the full relative path from the response's `Location` header and check the receipt using the original grant. For `pending`, wait the number of seconds in `Retry-After` and check again. A `committed` receipt confirms that the Input was updated, and `result.etag` gives its new revision. For `rejected`, inspect `result.error`. Geometry validation errors can include `path`, `itemIndex`, and `field`.
+3. **Check the write.** `202 Accepted` means the write was accepted for processing. Set `tor_receipt` to the full relative path from the response's `Location` header and check the receipt using the original grant. For `pending`, wait the number of seconds in `Retry-After` and check again. A `committed` receipt confirms that the tree is ready for the Input to read, and `result.etag` gives its new revision. For `rejected`, inspect `result.error`. Geometry validation errors can include `path`, `itemIndex`, and `field`.
 
    ```sh
    tor_receipt='/v0.0/requests/<requestId>'
@@ -79,21 +88,28 @@ Copy a fresh pairing code from the same Project. Decode the part after `TORAPI.`
      -H "Authorization: Bearer $tor_token"
    ```
 
-5. **Read the result of this write.** Read the Output that depends on that Input and send the same `X-Tor-Request-Id`. Retry the read if `409 OUTPUT_NOT_READY` indicates that Asterism is still evaluating. `INPUT_SUPERSEDED` means a newer write replaced this Input revision. `OUTPUT_UNAVAILABLE` means there is no usable geometry. A successful response contains a Geometry Collection with an `ETag` matching the receipt's `result.etag`. In the sample, branch `[0]` contains the point `[1, 2, 3]` metres, and branch `[3, 0, 7]` contains a triangle mesh.
+Replace the sample JSON with your own Collection and put the target Input ID in the request path. If a write's outcome is unknown, keep the original grant, UUID, URL, headers, and JSON bytes, then rerun just the `PUT` command. For `412 STALE_REVISION`, fetch the current Input ETag and decide whether to submit a new write with a new UUID.
 
-   ```sh
-   curl --noproxy '*' -sS -i "$tor_endpoint/v0.0/asterism/outputs/fixture" \
-     -H "Authorization: Bearer $tor_token" \
-     -H "X-Tor-Request-Id: $tor_request_id"
-   ```
+The next write to the same ID replaces the staged tree. The graph keeps using the last tree it read until the next **Read**. Changing a node ID, deleting the node, or closing the Project clears its exchange data. Use **Bake** or **Bake Geometry Tree** to create Station objects.
 
-Replace the sample JSON with your own Collection and update the URLs to match the connected nodes. Use each Input or Output node's **ID**. IDs accept ASCII letters, digits, hyphens, and underscores. They are case-sensitive and unique within each direction. To read the latest completed Output, omit `X-Tor-Request-Id`.
+## Read geometry
 
-If a write's outcome is unknown, keep the original grant, UUID, URL, headers, and JSON bytes, and rerun just the `curl` command from step 3. For `412 STALE_REVISION`, fetch the current Input ETag and decide whether to submit a new write with a new UUID.
+Connect Asterism geometry to a **Geometry Output** and set its **ID** to `result`. Press **Send** to publish a snapshot, then read it by Output ID.
 
-Native clients connect directly with redirects, proxies and cookies disabled. The host checks the peer and `Host` and rejects browser `Origin` on native routes. Pairing works from a draft. Open the same Project in Studio before exchanging geometry. A standalone Project supports reads and writes. A LAN Project supports reads after synchronization. [Full HTTP contract](contracts/openapi.yaml)
+```sh
+curl --noproxy '*' -sS -i "$tor_endpoint/v0.0/asterism/outputs/result" \
+  -H "Authorization: Bearer $tor_token"
+```
 
-Each write replaces the full Input tree and queues Asterism evaluation. An invalid write retains the previous snapshot. Clearing or changing an Input ID clears its data. Disabling suspends exchange and changes the ETag. Re-enabling the same Input retains its snapshot. Closing the Project releases the grant and in-memory exchange data. Use **Bake** or **Bake Geometry Tree** to create Station objects.
+`409 OUTPUT_UNAVAILABLE` means this Output has no published snapshot. After changing the upstream geometry, press **Send** again to publish the new snapshot.
+
+## Verify a round trip
+
+In a standalone test Project, connect the **Geometry Input** with ID `source` to the **Geometry Output** with ID `result`. Run this Python example and paste a fresh pairing code. At each prompt, press **Read** and then **Send** in Asterism, then press Enter to read the result. The script verifies two manual exchanges using the same IDs, write retries, and stale-version handling. [Python example](examples/python/asterism-exchange-smoke.py)
+
+```sh
+python3 examples/python/asterism-exchange-smoke.py source result
+```
 
 ## Geometry
 
@@ -139,7 +155,7 @@ pnpm test
 cargo test --manifest-path rust/Cargo.toml --locked
 ```
 
-The unit tests exercise the host and session with fixtures. Run the Quick start against a Torquetum Project to verify the full HTTP exchange. The first API import comes from Torquetum commit `942ddd33307966e8b6cbe1b2ad8ed5856c454feb`.
+The unit tests exercise the host and session with fixtures. Use a running Torquetum Project to verify the full exchange. The first API import comes from Torquetum commit `942ddd33307966e8b6cbe1b2ad8ed5856c454feb`. [Round-trip verification](#verify-a-round-trip)
 
 If you have access to the Torquetum source repository, follow its development setup to initialize the submodule and install dependencies. Then run `pnpm --filter @torquetum/studio build` and `cargo run -p torquetum-server` to start local Web. [Torquetum development setup](https://github.com/Avery320/torquetum#開發環境)
 

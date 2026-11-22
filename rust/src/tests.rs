@@ -435,7 +435,7 @@ async fn relay_timeout_releases_capacity_for_another_request() {
 }
 
 #[tokio::test]
-async fn generates_write_receipt_location_and_validates_exact_output_tag() {
+async fn generates_write_receipts_and_reads_outputs_by_id() {
     let (host, mut studio, instance, _shutdown) = project_host().await;
     let request_id = Uuid::new_v4();
     let bearer = format!("Authorization: Bearer {instance}.{FIXTURE_TOKEN}\r\n");
@@ -484,23 +484,14 @@ async fn generates_write_receipt_location_and_validates_exact_output_tag() {
     respond(&mut studio, &request["relayId"], 200, b"{}").await;
     assert_eq!(finish_http(client).await.0, StatusCode::OK);
 
-    let client = send_http(
-        &host,
-        "GET /v0.0/asterism/outputs/fixture",
-        authority(&host),
-        &auth,
-        b"",
-    )
-    .await;
+    let output = "GET /v0.0/asterism/outputs/fixture";
+    let request = send_http(&host, output, authority(&host), &auth, b"").await;
+    assert_eq!(finish_http(request).await.0, StatusCode::BAD_REQUEST);
+
+    let client = send_http(&host, output, authority(&host), &bearer, b"").await;
     let (request, _) = relay(&mut studio).await;
-    assert_eq!(request["requestId"], json!(request_id));
-    respond(&mut studio, &request["relayId"], 202, b"{}").await;
-    let mut reply = json!({"type":"response", "relayId":request["relayId"], "status":200, "mediaType":"application/json"});
-    respond_with(&mut studio, reply.clone(), b"missing receipt proof").await;
-    reply["etag"] = json!("\"r-2\"");
-    respond_with(&mut studio, reply, b"{}").await;
-    let (status, headers, body) = finish_http(client).await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(headers.lines().any(|line| line == "etag: \"r-2\""));
-    assert_eq!(body, b"{}");
+    assert_eq!(request["route"], "asterism-output");
+    assert!(request.get("requestId").is_none());
+    respond(&mut studio, &request["relayId"], 200, b"{}").await;
+    assert_eq!(finish_http(client).await.0, StatusCode::OK);
 }

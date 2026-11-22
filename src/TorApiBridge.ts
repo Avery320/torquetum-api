@@ -22,7 +22,6 @@ export interface TorApiRequest {
 export interface TorApiResponse {
   readonly status: number;
   readonly body: unknown;
-  readonly etag?: string;
   readonly retryAfterSeconds?: number;
 }
 
@@ -109,7 +108,7 @@ function readRequest(frame: ArrayBuffer, maxBodyBytes: number) {
 }
 
 function encodeResponse(relayId: string, response: TorApiResponse, maxBodyBytes: number): Uint8Array<ArrayBuffer> {
-  const { body, status, etag, retryAfterSeconds } = response;
+  const { body, status, retryAfterSeconds } = response;
   const text = JSON.stringify(body);
   if (text === undefined || !Number.isInteger(status) || status < 200 || status > 599) {
     throw new Error('Invalid Tor API response.');
@@ -119,7 +118,7 @@ function encodeResponse(relayId: string, response: TorApiResponse, maxBodyBytes:
   const bodyBytes = tooLarge ? RESPONSE_TOO_LARGE : payload;
   const header = encoder.encode(JSON.stringify({
     type: 'response', relayId, status: tooLarge ? 413 : status, mediaType: 'application/json',
-    ...(tooLarge ? {} : { etag, retryAfterSeconds }),
+    ...(tooLarge ? {} : { retryAfterSeconds }),
   }));
   const frame = new Uint8Array(4 + header.byteLength + bodyBytes.byteLength);
   new DataView(frame.buffer).setUint32(0, header.byteLength);

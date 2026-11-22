@@ -13,57 +13,66 @@ Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾�
 | `POST` | `/v0.0/pair` | 用一次性配對邀請取得專案的 `accessToken`。 |
 | `GET` | `/v0.0/project` | 查詢專案身分、讀寫權限、交換就緒狀態與傳輸上限。 |
 | `GET` | `/v0.0/asterism/ports` | 列出可交換資料的 Geometry Input 和 Geometry Output ID，以及各 Input 的 ETag。 |
-| `PUT` | `/v0.0/asterism/inputs/{id}` | 替換指定 Input 的整棵幾何資料樹。受理後回傳回執位置。 |
+| `PUT` | `/v0.0/asterism/inputs/{id}` | 將整棵幾何資料樹送到指定 Input，等待 Asterism 按 Read。受理後回傳回執位置。 |
 | `GET` | `/v0.0/requests/{requestId}` | 使用原寫入授權，查詢回執為 `pending`、`committed` 或 `rejected`。 |
-| `GET` | `/v0.0/asterism/outputs/{id}` | 讀取指定 Output 已求解的幾何資料樹。可帶 `X-Tor-Request-Id` 讀取特定寫入的結果。 |
+| `GET` | `/v0.0/asterism/outputs/{id}` | 讀取指定 Output 最近一次按 Send 發布的幾何資料樹。 |
 
 ## 快速開始
 
-在與用戶端相同的電腦上，啟動支援 V0.0 的 Torquetum Desktop 或本機 Web（由 `torquetum-server` 提供）。
+在與用戶端相同的電腦上，啟動支援 V0.0 的 Torquetum Desktop 或本機 Web（由 `torquetum-server` 提供），並在 Studio 開啟專案。送入與讀取共用同一組配對授權，可依需要各自使用。
 
-1. 在 Studio 開啟供驗收使用的獨立 Project。在 Asterism 將 **Geometry Input** 直接接到 **Geometry Output**，啟用兩個節點並將 **ID** 都設為 `fixture`。
-2. 在該專案的 **Project Settings → External Connections**，點選 **Pairing code** 旁的 **Copy**。
-3. 下載 API 儲存庫，執行 Python 範例，並在提示出現時貼上配對碼。 [Python 範例](examples/python/asterism-exchange-smoke.py)
+- **只送入**時，在 Asterism 的 **Exchange** 新增 **Geometry Input**。 [送入幾何](#送入幾何)
+- **只讀取**時，在 **Exchange** 新增 **Geometry Output** 並接上要提供的幾何。 [讀取幾何](#讀取幾何)
+
+Input 和 Output 的 ID 可各自設定，支援英文字母、數字、連字號和底線，區分大小寫並在各自方向中保持唯一。
+
+下列命令使用 `curl`、Python 3 和儲存庫內的樣本。請在同一個終端機中執行。
+
+```sh
+git clone https://github.com/Avery320/torquetum-api.git
+cd torquetum-api
+```
+
+### 配對
+
+在專案的 **Project Settings → External Connections** 點選 **Pairing code** 旁的 **Copy**。將 `TORAPI.` 後面的內容以無填充 base64url 解碼為 UTF-8 JSON，取出 `endpoint` 和 `invite`。所有請求都使用該 `endpoint`，格式為 `http://127.0.0.1:<port>`。配對碼限用一次，到期或授權失效時可複製新碼。 [配對碼解碼實作](examples/python/asterism-exchange-smoke.py)
+
+用解出的實際值取代下列網址和 `<invite>`，再從成功回應取得 `accessToken`。 [配對請求與回應樣本](fixtures/connection.json)
+
+```sh
+tor_endpoint='http://127.0.0.1:44555'
+curl --noproxy '*' -sS "$tor_endpoint/v0.0/pair" \
+  -H 'Content-Type: application/json' \
+  --data '{"invite":"<invite>","clientName":"Geometry example"}'
+```
+
+將 `tor_token` 填成實際的 `accessToken`。後續送入或讀取皆可使用這組授權。用 `GET /v0.0/project` 可查詢 `canRead`、`canWrite`、支援類型 `kinds` 和傳輸上限 `limits`。
+
+```sh
+tor_token='<accessToken>'
+curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
+  -H "Authorization: Bearer $tor_token"
+```
+
+原生客戶端需直接連線，並關閉重新導向、代理伺服器和 Cookie。宿主會檢查連線來源與 `Host`，並拒絕帶有瀏覽器 `Origin` 的原生 API 請求。草稿專案即可配對，需在 Studio 開啟同一個專案才可交換幾何。獨立專案可讀寫，LAN 共享專案在同步完成後可讀取。 [完整 HTTP 規格](contracts/openapi.yaml)
+
+## 送入幾何
+
+在獨立專案的 Asterism 新增 **Geometry Input**，將 **ID** 設為 `source`。把 Collection 送到這個 ID，寫入完成後按 **Read**，才會更新圖面下游。
+
+1. **取得 Input 版本。** 在節點清單的 `items` 找到 `direction` 為 `input`、`id` 為 `source` 的項目，取出 `etag`。使用 JSON 解碼後的字串，保留 ETag 本身的雙引號。
 
    ```sh
-   git clone https://github.com/Avery320/torquetum-api.git
-   cd torquetum-api
-   python3 examples/python/asterism-exchange-smoke.py fixture fixture
-   ```
-
-範例只使用 Python 3 標準函式庫。它會用同一個點的兩組座標更新測試 Input，核對指定版本的讀回結果，並驗證重送和過期版本。驗收成功時顯示 `Verified two revisions of the same Asterism input, exact output reads and idempotent retries.`
-
-## 自行呼叫 HTTP
-
-沿用快速開始的測試節點。下列命令使用 `curl` 與 Python 3，請在 API 儲存庫根目錄的同一個終端機中依序執行。
-
-從同一個專案複製一組新的配對碼，將 `TORAPI.` 後面的內容以無填充 base64url 解碼為 UTF-8 JSON，再取出 `endpoint` 和 `invite`。所有請求使用該 `endpoint`，格式為 `http://127.0.0.1:<port>`。配對碼限用一次，配對碼到期或授權失效時，從專案設定複製新碼。 [配對碼解碼實作](examples/python/asterism-exchange-smoke.py)
-
-1. **換取授權。** 用配對碼解出的實際值取代範例中的網址和 `<invite>`。從成功回應取出 `accessToken`。 [配對請求與回應樣本](fixtures/connection.json)
-
-   ```sh
-   tor_endpoint='http://127.0.0.1:44555'
-   curl --noproxy '*' -sS "$tor_endpoint/v0.0/pair" \
-     -H 'Content-Type: application/json' \
-     --data '{"invite":"<invite>","clientName":"Geometry example"}'
-   ```
-
-2. **查專案狀態與 Input 版本。** 填入實際的 `accessToken`。以 `canWrite` 確認目前可以寫入，並從 `kinds` 和 `limits` 查詢支援的幾何類型與傳輸上限。在節點清單的 `items` 找到 `direction` 為 `input`、`id` 為 `fixture` 的項目，取出 `etag`。使用 JSON 解碼後的字串，保留 ETag 本身的雙引號。
-
-   ```sh
-   tor_token='<accessToken>'
-   curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
-     -H "Authorization: Bearer $tor_token"
    curl --noproxy '*' -sS "$tor_endpoint/v0.0/asterism/ports" \
      -H "Authorization: Bearer $tor_token"
    ```
 
-3. **送出混合幾何。** 將範例 ETag 換成查到的實際值。每筆新寫入使用新的 UUID。下列命令把儲存庫內的 JSON 直接送到 `fixture` Input，替換它的整棵資料樹。範例包含點、直線、折線、平面、方體和網格。 [基本 Collection 樣本](fixtures/geometry-collection-basic.json)
+2. **送出混合幾何。** 將範例 ETag 換成查到的實際值。每筆新寫入使用新的 UUID。下列命令把儲存庫內的 JSON 直接送到 `source` Input，替換它的整棵資料樹。範例包含點、直線、折線、平面、方體和網格。 [基本 Collection 樣本](fixtures/geometry-collection-basic.json)
 
    ```sh
    tor_etag='"input-v1"'
    tor_request_id=$(python3 -c 'from uuid import uuid4; print(uuid4())')
-   curl --noproxy '*' -sS -i -X PUT "$tor_endpoint/v0.0/asterism/inputs/fixture" \
+   curl --noproxy '*' -sS -i -X PUT "$tor_endpoint/v0.0/asterism/inputs/source" \
      -H "Authorization: Bearer $tor_token" \
      -H 'Content-Type: application/json' \
      -H "If-Match: $tor_etag" \
@@ -71,7 +80,7 @@ Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾�
      --data-binary @fixtures/geometry-collection-basic.json
    ```
 
-4. **確認寫入。** `202 Accepted` 表示已受理。將 `tor_receipt` 設為回應標頭 `Location` 的完整相對路徑，使用原本的授權查回執。`pending` 時依 `Retry-After` 所示秒數再查。`committed` 表示 Input 已寫入，`result.etag` 是新版本。`rejected` 時查看 `result.error`，幾何驗證錯誤可能包含 `path`、`itemIndex` 和 `field`。
+3. **確認寫入。** `202 Accepted` 表示已受理。將 `tor_receipt` 設為回應標頭 `Location` 的完整相對路徑，使用原本的授權查回執。`pending` 時依 `Retry-After` 所示秒數再查。`committed` 表示 Input 已有一份待讀資料，`result.etag` 是新版本。`rejected` 時查看 `result.error`，幾何驗證錯誤可能包含 `path`、`itemIndex` 和 `field`。
 
    ```sh
    tor_receipt='/v0.0/requests/<requestId>'
@@ -79,21 +88,28 @@ Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾�
      -H "Authorization: Bearer $tor_token"
    ```
 
-5. **讀回這次結果。** 在已連到該 Input 的 Output 上讀取資料，帶上同一個 `X-Tor-Request-Id`。`409 OUTPUT_NOT_READY` 表示仍在求解，稍後再讀。`INPUT_SUPERSEDED` 表示該筆寫入已被新版取代。`OUTPUT_UNAVAILABLE` 表示目前沒有可用幾何。成功時回傳 Geometry Collection，回應的 `ETag` 和回執的 `result.etag` 一致。可在範例結果確認分支 `[0]` 的點為 `[1, 2, 3]` 公尺，分支 `[3, 0, 7]` 包含三角網格。
+將樣本 JSON 換成自己產生的 Collection，並在請求路徑填入要寫入的 Input ID。寫入結果未明時，保留原本的授權、UUID、網址、標頭和 JSON 內容，只重跑 `PUT` 的 `curl` 命令。收到 `412 STALE_REVISION` 時，先重新查 Input 的 ETag，再確認是否要用新 UUID 重新寫入。
 
-   ```sh
-   curl --noproxy '*' -sS -i "$tor_endpoint/v0.0/asterism/outputs/fixture" \
-     -H "Authorization: Bearer $tor_token" \
-     -H "X-Tor-Request-Id: $tor_request_id"
-   ```
+同一 ID 的下一次寫入會替換最新的待讀資料。按 **Read** 前，下游仍使用上一次讀取的結果。更改 ID、刪除節點或關閉專案會清除對應的暫存。用 **Bake** 或 **Bake Geometry Tree** 將結果存成 Station 物件。
 
-將樣本 JSON 換成自己產生的 Collection，並依實際接線調整網址中的節點 ID。Input 和 Output 各用對應節點的 **ID**，支援英文字母、數字、連字號和底線，區分大小寫並在各自方向中保持唯一。要讀取最近完成的 Output，可省略 `X-Tor-Request-Id`。
+## 讀取幾何
 
-寫入結果未明時，保留原本的授權、UUID、網址、標頭和 JSON 內容，只重跑步驟 3 的 `curl` 命令。收到 `412 STALE_REVISION` 時，先重新查 Input 的 ETag，再確認是否要用新 UUID 重新寫入。
+把 Asterism 中的幾何接到 **Geometry Output** 並將 **ID** 設為 `result`。按 **Send** 發布一份快照，再用 Output ID 讀取。
 
-原生客戶端需直接連線，並關閉重新導向、代理伺服器和 Cookie。宿主會檢查連線來源與 `Host`，並拒絕帶有瀏覽器 `Origin` 的原生 API 請求。草稿專案即可配對，需在 Studio 開啟同一個專案才可交換幾何。獨立專案可讀寫，LAN 共享專案在同步完成後可讀取。 [完整 HTTP 規格](contracts/openapi.yaml)
+```sh
+curl --noproxy '*' -sS -i "$tor_endpoint/v0.0/asterism/outputs/result" \
+  -H "Authorization: Bearer $tor_token"
+```
 
-每次寫入會替換 Input 的完整資料樹，並排入 Asterism 求解。寫入驗證失敗時保留前一筆資料。清空或修改 Input ID 會清除資料。停用 Input 會暫停交換並更新 ETag，重新啟用同一個 Input 時會保留原有資料。關閉專案會釋放授權和記憶體中的交換資料。用 **Bake** 或 **Bake Geometry Tree** 將結果存成 Station 物件。
+`409 OUTPUT_UNAVAILABLE` 表示該 Output 尚未成功送出。修改上游幾何後，再按一次 **Send** 才會更新可讀的快照。
+
+## 往返驗收
+
+在獨立測試專案，把 ID 為 `source` 的 **Geometry Input** 接到 ID 為 `result` 的 **Geometry Output**。執行下列 Python 範例並貼上新配對碼。每次寫入完成後，跟著提示在 Asterism 按 **Read → Send**，再回到終端機按 Enter 讀取。程式驗證同 ID 的兩次手動交換，以及重送和過期版本的處理。 [Python 範例](examples/python/asterism-exchange-smoke.py)
+
+```sh
+python3 examples/python/asterism-exchange-smoke.py source result
+```
 
 ## 幾何格式
 
@@ -139,7 +155,7 @@ pnpm test
 cargo test --manifest-path rust/Cargo.toml --locked
 ```
 
-單元測試使用樣本驗證 HTTP 宿主與工作階段。需要驗證完整 HTTP 收發時，請依快速開始連到實際運行的 Torquetum 專案。此 API 最初從 Torquetum 提交 `942ddd33307966e8b6cbe1b2ad8ed5856c454feb` 匯出。
+單元測試使用樣本驗證 HTTP 宿主與工作階段。用實際執行的 Torquetum 專案可驗證完整收發。此 API 最初從 Torquetum 提交 `942ddd33307966e8b6cbe1b2ad8ed5856c454feb` 匯出。 [往返驗收](#往返驗收)
 
 若有 Torquetum 主儲存庫的存取權，可依主專案說明初始化 submodule 與安裝依賴，再執行 `pnpm --filter @torquetum/studio build` 和 `cargo run -p torquetum-server` 啟動本機 Web。 [Torquetum 開發環境](https://github.com/Avery320/torquetum#開發環境)
 

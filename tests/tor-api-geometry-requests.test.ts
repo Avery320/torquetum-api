@@ -18,8 +18,7 @@ const { maxBodyBytes } = bridgeFixture.bootstrap;
 async function setup() {
   let etag = '"original"';
   let output: unknown;
-  let ready = true;
-  let upstream = 'in';
+  let staged: unknown;
   const exchange: TorApiGeometryExchange<unknown> = {
     list: () => ({ items: [
       { id: 'in', direction: 'input', etag },
@@ -29,20 +28,15 @@ async function setup() {
       if (id !== 'in') throw new GeometryAccessError(404, 'PORT_NOT_FOUND', 'Input unavailable');
       if (ifMatch !== etag) throw new GeometryAccessError(412, 'STALE_REVISION', 'Input changed');
     },
-    async read(id, _signal, expected) {
+    read(id) {
       if (id !== 'out') throw new GeometryAccessError(404, 'PORT_NOT_FOUND', 'Output unavailable');
-      if (expected && expected.etag !== etag) throw new GeometryAccessError(409, 'INPUT_SUPERSEDED', 'Input changed');
-      if (expected && expected.id !== upstream) {
-        throw new GeometryAccessError(409, 'OUTPUT_UNRELATED', 'The requested Input is not upstream.');
-      }
-      if (!ready) throw new GeometryAccessError(409, 'OUTPUT_NOT_READY', 'Still solving');
-      if (!output) throw new GeometryAccessError(409, 'OUTPUT_UNAVAILABLE', 'The Output has no geometry.');
+      if (!output) throw new GeometryAccessError(409, 'OUTPUT_UNAVAILABLE', 'Press Send on the Output.');
       return output;
     },
     async prepare({ collection }) { return collection; },
     commit(intent, prepared) {
       this.checkWrite(intent.portId, intent.ifMatch);
-      output = prepared;
+      staged = prepared;
       etag = '"' + crypto.randomUUID() + '"';
       return { id: intent.portId, etag };
     },
@@ -78,9 +72,7 @@ async function setup() {
   const token = await pair();
   const send = (request: TorApiRequest, bearer = token) => handler({ ...request, bearer });
   const get = (request: Omit<TorApiRequest, 'body'>, bearer?: string) => send({ ...request, body: new Uint8Array() }, bearer);
-  const read = (requestId?: string, bearer?: string) => get({
-    route: 'asterism-output', portId: 'out', ...(requestId ? { requestId } : {}),
-  }, bearer);
+  const read = (bearer?: string) => get({ route: 'asterism-output', portId: 'out' }, bearer);
   const receipt = (requestId: string, bearer?: string) => get({ route: 'receipt', requestId }, bearer);
   const written = async (id: string, status = 200) => vi.waitFor(async () => {
     const response = await receipt(id);
@@ -109,8 +101,7 @@ async function setup() {
     state, get, pair, send, replace, write, read, receipt, written, holdDecode,
     reconnect: () => { session.invalidate(); return pair(); },
     changeTag: () => { etag = '"new-instance"'; },
-    setReady: (value: boolean) => { ready = value; },
-    disconnectOutput: () => { upstream = 'other'; },
+    publish: () => { output = staged; },
   };
 }
 
@@ -126,7 +117,7 @@ it('admits one write, returns the same receipt on retry and keeps receipts priva
   expect(await app.send(first)).toEqual(accepted);
   expect(await app.send({ ...next, requestId: first.requestId })).toMatchObject(error(409, 'REQUEST_ID_CONFLICT'));
   expect(await app.send(next)).toMatchObject(error(429, 'CAPACITY_EXCEEDED'));
-  expect(await app.read(first.requestId)).toMatchObject(error(409, 'OUTPUT_NOT_READY'));
+  expect(await app.read()).toMatchObject(error(409, 'OUTPUT_UNAVAILABLE'));
   const reader = await app.pair(true);
   expect(await app.send(next, reader)).toMatchObject(error(403, 'READ_ONLY'));
   expect(await app.receipt(first.requestId, reader)).toMatchObject(error(404, 'REQUEST_UNKNOWN'));
@@ -150,7 +141,6 @@ it('rechecks graph input version and authorization after asynchronous decoding',
     change();
     resume();
     expect((await app.written(request.requestId, status)).result).toMatchObject({ error: { code } });
-    expect(await app.read(request.requestId)).toMatchObject(error(409, 'REQUEST_REJECTED'));
   }
   expect(await app.read()).toMatchObject(error(409, 'OUTPUT_UNAVAILABLE'));
 });
@@ -165,7 +155,7 @@ it('lets a new pairing write while an invalidated connection is still decoding',
     const next = await app.write(1.493);
     expect(await app.send(next, token)).toMatchObject({ status: 202 });
     await vi.waitFor(async () => {
-      expect(await app.read(next.requestId, token)).toMatchObject({ status: 200, body: collection(1.493) });
+      expect(await app.receipt(next.requestId, token)).toMatchObject({ status: 200, body: { state: 'committed' } });
     });
     expect(await app.read()).toMatchObject(error(401, 'PAIRING_REQUIRED'));
   } finally {
@@ -174,25 +164,22 @@ it('lets a new pairing write while an invalidated connection is still decoding',
   expect(app.replace).toHaveBeenCalledOnce();
 });
 
-it('reads a committed revision only after solving and rejects superseded revisions', async () => {
+it('reads the last published collection independently of staged writes and their receipts', async () => {
   const app = await setup();
   const first = await app.write(1);
-  expect(await app.send(first)).toMatchObject({ status: 202 });
-  const { result: firstResult } = await app.written(first.requestId);
-  expect(await app.read(first.requestId)).toEqual({ status: 200, body: collection(1), etag: firstResult.etag });
+  await app.send(first);
+  await app.written(first.requestId);
+  expect(await app.read()).toMatchObject(error(409, 'OUTPUT_UNAVAILABLE'));
+  app.publish();
+  const reader = await app.pair(true);
+  expect(await app.read(reader)).toEqual({ status: 200, body: collection(1) });
 
   const next = await app.write(1.493);
-  app.setReady(false);
-  expect(await app.send(next)).toMatchObject({ status: 202 });
-  const { result: nextResult } = await app.written(next.requestId);
-  expect(await app.read(first.requestId)).toMatchObject(error(409, 'INPUT_SUPERSEDED'));
-  expect(await app.read(next.requestId)).toMatchObject(error(409, 'OUTPUT_NOT_READY'));
-  app.setReady(true);
-  expect(await app.read(next.requestId)).toEqual({ status: 200, body: collection(1.493), etag: nextResult.etag });
-
-  app.disconnectOutput();
-  expect(await app.read(next.requestId)).toMatchObject(error(409, 'OUTPUT_UNRELATED'));
-  expect(await app.read()).toEqual({ status: 200, body: collection(1.493) });
+  await app.send(next);
+  await app.written(next.requestId);
+  expect(await app.read(reader)).toEqual({ status: 200, body: collection(1) });
+  app.publish();
+  expect(await app.read(reader)).toEqual({ status: 200, body: collection(1.493) });
 });
 
 it('expires a Project grant and renews pairing against the current Project', async () => {

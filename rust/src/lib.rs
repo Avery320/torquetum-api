@@ -41,7 +41,6 @@ const RECEIPTS_PATH: &str = "/requests";
 const TICKET_TTL: Duration = Duration::from_secs(30);
 const ATTACH_TIMEOUT: Duration = Duration::from_secs(3);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-const OUTPUT_READ_TIMEOUT: Duration = Duration::from_secs(60);
 const SMALL_REQUEST_BYTES: usize = 4 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const SMALL_RESPONSE_BYTES: usize = 16 * 1024;
@@ -495,12 +494,7 @@ async fn forward(
         .requests
         .try_acquire()
         .map_err(|_| TransportError::Capacity)?;
-    let deadline = if route == Route::AsterismOutput {
-        OUTPUT_READ_TIMEOUT
-    } else {
-        REQUEST_TIMEOUT
-    };
-    timeout(deadline, relay(&state, route, target, request))
+    timeout(REQUEST_TIMEOUT, relay(&state, route, target, request))
         .await
         .map_err(|_| TransportError::Unavailable)?
 }
@@ -529,11 +523,12 @@ async fn relay(
     let instance = bearer
         .map(|token| routing_instance(token).ok_or(TransportError::PairingRequired))
         .transpose()?;
+    if !is_input && headers.contains_key(&REQUEST_ID) {
+        return Err(TransportError::InvalidRequest);
+    }
     let request_id = match route {
         Route::Receipt => Some(parse_request_id(target.as_deref())?),
-        _ if is_input || (route == Route::AsterismOutput && headers.contains_key(&REQUEST_ID)) => {
-            Some(parse_request_id(single_header(headers, REQUEST_ID))?)
-        }
+        Route::AsterismInput => Some(parse_request_id(single_header(headers, REQUEST_ID))?),
         _ => None,
     };
     let if_match = if is_input {
@@ -695,7 +690,6 @@ enum Reply {
         relay_id: Uuid,
         status: u16,
         media_type: Option<String>,
-        etag: Option<String>,
         retry_after_seconds: Option<u32>,
     },
 }
@@ -715,7 +709,6 @@ fn receive_response(state: &HostState, owner: Uuid, frame: Bytes) {
         relay_id,
         status,
         media_type,
-        etag,
         retry_after_seconds,
     }) = serde_json::from_slice(&frame[4..4 + length])
     else {
@@ -743,14 +736,9 @@ fn receive_response(state: &HostState, owner: Uuid, frame: Bytes) {
         (StatusCode::ACCEPTED, _, _) => return,
         _ => None,
     };
-    let expects_etag = pending.route == Route::AsterismOutput
-        && pending.request_id.is_some()
-        && status == StatusCode::OK;
-    if etag.is_some() != expects_etag
-        || etag.as_deref().is_some_and(|tag| !strong_etag(tag))
-        || media_type
-            .as_deref()
-            .is_some_and(|value| !json_media_type(value))
+    if media_type
+        .as_deref()
+        .is_some_and(|value| !json_media_type(value))
     {
         return;
     }
@@ -759,7 +747,6 @@ fn receive_response(state: &HostState, owner: Uuid, frame: Bytes) {
     let headers = response.headers_mut();
     for (name, value) in [
         (header::CONTENT_TYPE, media_type),
-        (header::ETAG, etag),
         (header::LOCATION, location),
         (
             header::RETRY_AFTER,

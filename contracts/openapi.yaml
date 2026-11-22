@@ -103,7 +103,7 @@ paths:
     put:
       operationId: writeGeometry
       summary: Replace the geometry tree at an Input
-      description: Each write replaces the full Input tree. A 202 response admits the request for processing. Query its Location using the original grant to confirm that the write committed.
+      description: A committed write stages the full tree for the Input. Press Read in Asterism to apply it. A 202 response admits the write for processing. Query its Location using the original grant to confirm that it committed.
       parameters:
         - $ref: "#/components/parameters/NodeId"
         - name: X-Tor-Request-Id
@@ -172,26 +172,18 @@ paths:
   /v0.0/asterism/outputs/{id}:
     get:
       operationId: readGeometry
-      summary: Read a completed Asterism Output
-      description: Read the latest completed result, or include X-Tor-Request-Id to read the result for a specific committed write. That read requires the same grant and an Output that depends on the written Input.
+      summary: Read the last Collection sent from an Asterism Output
+      description: Press Send on the Geometry Output in Asterism to publish a snapshot. Reads use its ID and can retrieve the same published snapshot until Send replaces it.
       parameters:
         - $ref: "#/components/parameters/NodeId"
-        - name: X-Tor-Request-Id
-          in: header
-          description: A committed Input write from this grant which the Output depends on.
-          schema: { type: string, format: uuid }
       responses:
         "200":
-          description: Completed geometry tree
-          headers:
-            ETag:
-              description: Input revision for a successful read qualified by a write request ID.
-              schema: { $ref: "#/components/schemas/StrongTag" }
+          description: Published geometry tree
           content:
             application/json:
               schema: { $ref: "./geometry-collection.schema.json" }
-        "404": { $ref: "#/components/responses/Error", description: Output or qualified request unavailable }
-        "409": { $ref: "#/components/responses/Error", description: Output not ready or requested revision unavailable }
+        "404": { $ref: "#/components/responses/Error", description: Output unavailable }
+        "409": { $ref: "#/components/responses/Error", description: No snapshot has been sent from this Output }
         default: { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
