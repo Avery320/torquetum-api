@@ -2,7 +2,7 @@
 
 [繁體中文](README.md) · English
 
-The local HTTP API provides Project pairing, status queries, and Asterism geometry exchange. This repository contains the OpenAPI V0.0 contract, the Geometry Collection JSON Schema, and the Rust and TypeScript code that Torquetum uses to serve the API. External applications connect to a running Torquetum Project over HTTP. [OpenAPI contract](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Alidade for Grasshopper](https://github.com/Avery320/alidade)
+The local HTTP API provides Project pairing, status queries, and Asterism geometry exchange. This repository contains the OpenAPI V0.0 contract, the Geometry Collection JSON Schema, and the Rust and TypeScript code that Torquetum uses to serve the API. External applications connect to a running Torquetum Project over HTTP. [OpenAPI contract](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Nuncius for Grasshopper](https://github.com/Avery320/nuncius)
 
 Use your own geometry source and HTTP client. Convert the source geometry to a Geometry Collection and use the pairing grant to send it to the chosen Asterism Input ID. Torquetum validates the collection, updates the Input, evaluates downstream nodes, and makes the Output available to read. This repository provides the contracts, JSON samples, and a runnable Python example. [Geometry format](#geometry)
 
@@ -139,7 +139,7 @@ Each branch has a `path` and `items`. A path is a nonempty array of nonnegative 
 - Meshes carry vertices and triangle faces. Triangulate quads or polygons in the source before writing the indices.
 - For BRep, the receiver checks that the shape matches `shapeType` and uses the units declared in the STEP file. Torquetum keeps the exact CAD shape and prepares a mesh for display.
 
-Use the samples below as a starting point for your own Collection. For Rhino geometry conversion and Grasshopper instructions, see the Alidade guide. [Basic collection](fixtures/geometry-collection-basic.json) · [Mixed BRep collection](fixtures/geometry-collection.json) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Alidade guide](https://github.com/Avery320/alidade#readme)
+Use the samples below as a starting point for your own Collection. For Rhino geometry conversion and Grasshopper instructions, see the Nuncius guide. [Basic collection](fixtures/geometry-collection-basic.json) · [Mixed BRep collection](fixtures/geometry-collection.json) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Nuncius guide](https://github.com/Avery320/nuncius#readme)
 
 ## Structure
 

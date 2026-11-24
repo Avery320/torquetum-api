@@ -7,7 +7,7 @@
       "contentType": "application/json",
       "body": {
         "credential": "ERERERERQRGBERERERERERERERERERERERERERERERERERERERERERERERERERER",
-        "clientName": "Alidade fixture"
+        "clientName": "Example client"
       }
     },
     "response": {

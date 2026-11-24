@@ -2,7 +2,7 @@
 
 繁體中文 · [English](README.en.md)
 
-Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾何交換。本儲存庫包含 V0.0 的 OpenAPI 契約、Geometry Collection 的 JSON Schema，以及 Torquetum 用來提供 API 的 Rust 與 TypeScript 實作。外部程式透過 HTTP 連線至執行中的 Torquetum 專案。 [OpenAPI 契約](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Grasshopper 外掛 Alidade](https://github.com/Avery320/alidade)
+Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾何交換。本儲存庫包含 V0.0 的 OpenAPI 契約、Geometry Collection 的 JSON Schema，以及 Torquetum 用來提供 API 的 Rust 與 TypeScript 實作。外部程式透過 HTTP 連線至執行中的 Torquetum 專案。 [OpenAPI 契約](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Grasshopper 外掛 Nuncius](https://github.com/Avery320/nuncius)
 
 外部程式使用自己的幾何來源和 HTTP 客戶端。將來源幾何轉成 Geometry Collection，並用配對取得的授權送到指定的 Asterism Input ID。Torquetum 會驗證、更新 Input、求解下游節點，並提供 Output 給外部程式讀取。下載此儲存庫可取得規格、JSON 樣本和可執行的 Python 範例。 [幾何格式](#幾何格式)
 
@@ -141,7 +141,7 @@ python3 examples/python/asterism-exchange-smoke.py source result
 - 網格傳輸頂點和三角面。來源有四邊面或多邊面時，先轉為三角面再填索引。
 - BRep 接收端會核對 `shapeType` 與形狀相符，並使用 STEP 內宣告的單位。Torquetum 保留精確 CAD 形狀，再產生用於顯示的網格。
 
-可沿用下列樣本建立自己的 Collection。Grasshopper 操作與 Rhino 幾何轉換請參照 Alidade 使用說明。 [基本 Collection](fixtures/geometry-collection-basic.json) · [混合 BRep Collection](fixtures/geometry-collection.json) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Alidade 使用說明](https://github.com/Avery320/alidade#readme)
+可沿用下列樣本建立自己的 Collection。Grasshopper 操作與 Rhino 幾何轉換請參照 Nuncius 使用說明。 [基本 Collection](fixtures/geometry-collection-basic.json) · [混合 BRep Collection](fixtures/geometry-collection.json) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Nuncius 使用說明](https://github.com/Avery320/nuncius#readme)
 
 ## 專案結構
 
