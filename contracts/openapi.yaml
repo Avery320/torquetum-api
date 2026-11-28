@@ -293,7 +293,9 @@ components:
         code: { type: string }
         message: { type: string }
         requestId: { type: string, format: uuid }
-        reason: { type: string }
+        reason:
+          type: string
+          description: A machine-readable reason for the error, when available.
         field:
           type: string
           description: The invalid field or field path, when available.

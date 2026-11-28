@@ -4,7 +4,7 @@
 
 The local HTTP API provides Project pairing, status queries, and Asterism geometry exchange. This repository contains the OpenAPI V0.0 contract, the Geometry Collection JSON Schema, and the Rust and TypeScript code that Torquetum uses to serve the API. External applications connect to a running Torquetum Project over HTTP. [OpenAPI contract](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Nuncius for Grasshopper](https://github.com/Avery320/nuncius)
 
-Use your own geometry source and HTTP client. Convert the source geometry to a Geometry Collection and use the pairing grant to send it to the chosen Asterism Input ID. Torquetum validates the collection, updates the Input, evaluates downstream nodes, and makes the Output available to read. This repository provides the contracts, JSON samples, and a runnable Python example. [Geometry format](#geometry)
+Convert source geometry to a Geometry Collection and use the pairing grant to write to an Asterism Input ID. Torquetum validates and stages the collection. Press **Read** to apply the Input and **Send** to publish the Output for external clients. [Geometry format](#geometry)
 
 ## API overview
 
@@ -88,7 +88,7 @@ In a standalone Project, add a **Geometry Input** in Asterism and set its **ID**
      --data-binary @fixtures/geometry-collection-basic.json
    ```
 
-3. **Check the write.** `202 Accepted` means the write was accepted for processing. Set `tor_receipt` to the full relative path from the response's `Location` header and check the receipt using the original grant. For `pending`, wait the number of seconds in `Retry-After` and check again. A `committed` receipt confirms that the tree is ready for the Input to read, and `result.etag` gives its new revision. For `rejected`, inspect `result.error`. Geometry validation errors can include `path`, `itemIndex`, and `field`.
+3. **Check the write.** `202 Accepted` means the write was accepted for processing. Set `tor_receipt` to the full relative path from the response's `Location` header and check the receipt using the original grant. For `pending`, wait the number of seconds in `Retry-After` and check again. A `committed` receipt means the full Collection is staged, and `result.etag` gives its new revision. For `rejected`, inspect `result.error`. Geometry validation errors can include `reason`, `path`, `itemIndex`, and `field`.
 
    ```sh
    tor_receipt='/v0.0/requests/<requestId>'
@@ -98,7 +98,7 @@ In a standalone Project, add a **Geometry Input** in Asterism and set its **ID**
 
 Replace the sample JSON with your own Collection and put the target Input ID in the request path. If a write's outcome is unknown, keep the original grant, UUID, URL, headers, and JSON bytes, then rerun just the `PUT` command. For `412 STALE_REVISION`, fetch the current Input ETag and decide whether to submit a new write with a new UUID.
 
-The next write to the same ID replaces the staged tree. The graph keeps using the last tree it read until the next **Read**. Changing a node ID, deleting the node, or closing the Project clears its exchange data. Use **Bake** or **Bake Geometry Tree** to create Station objects.
+A write replaces the staged tree for the same ID only after the full Collection passes validation and commits. The graph keeps using the last tree it read until the next **Read**. Changing a node ID, deleting the node, or closing the Project clears its exchange data. Use **Bake** or **Bake Geometry Tree** to create Station objects.
 
 ## Read geometry
 
@@ -129,15 +129,16 @@ Each branch has a `path` and `items`. A path is a nonempty array of nonnegative 
 | --- | --- | --- |
 | Point | `point` | `position` is an XYZ coordinate `[x, y, z]`. |
 | Line (Curve) | `line` | `start` and `end` are distinct XYZ coordinates. Optional `domain: [t0, t1]` is strictly increasing and defaults to `[0, 1]`. |
-| Polyline (Curve) | `polyline` | `points` contains ordered XYZ coordinates and `closed` is a boolean. Consecutive points must differ. An open polyline needs at least two points, and a closed polyline needs at least three distinct points with the repeated closing point omitted. Optional `domain: [t0, t1]` is strictly increasing and defaults to 0 through the number of segments. |
+| Polyline (Curve) | `polyline` | `points` contains ordered XYZ coordinates and `closed` is a boolean. Consecutive points must differ. An open polyline needs at least two points, and a closed polyline needs at least three distinct points with the repeated closing point omitted. Optional `domain: [t0, t1]` is strictly increasing and defaults to 0 through the number of segments. Each segment takes an equal share of the domain and is interpolated linearly within that interval. |
 | Plane | `plane` | `origin` is an XYZ position, `normal` is the plane normal, and `direction` is the reference X direction. Both vectors must be nonzero and nonparallel. |
 | Box | `box` | `plane` contains `origin`, `normal`, and `direction`. Supply a strictly increasing `[min, max]` range for each of `x`, `y`, and `z` along the plane's local axes. |
 | Mesh | `triangle-mesh` | `positions` contains at least three XYZ vertices and `triangles` contains at least one face. Each face has three valid zero-based vertex indices and a positive area. |
 | Surface and BRep | `brep-step` | Set `shapeType` to `face` for a single face, `shell` for a shell, or `solid` for a solid. Supply the complete STEP Part 21 text for one connected shape in `step`. |
 
-- Curve exchange supports lines and polylines. Standalone circles, arcs, and general NURBS curves have no exchange type in V0.0.
-- Meshes carry vertices and triangle faces. Triangulate quads or polygons in the source before writing the indices.
-- For BRep, the receiver checks that the shape matches `shapeType` and uses the units declared in the STEP file. Torquetum keeps the exact CAD shape and prepares a mesh for display.
+Each client adapter maps its source geometry to the representations above. Exact curve conversion preserves shape, closure, and parameterization. Standalone circles, arcs, ellipses, and general NURBS curves, along with SubD, block instances, and point clouds, have no dedicated `kind`. If approximation is acceptable, choose a tolerance in the source application and convert curves to polylines or surfaces to triangle meshes.
+
+- Triangulate quads or polygons in the source before writing the indices. Vertex normals, UVs, colors, and polygon groups are outside the exchange format.
+- Multiple disconnected BReps can be separate items in the same Collection. The receiver checks `shapeType` and uses the units declared in the STEP text. Torquetum uses the CAD shape for operations and generates a display mesh. Face and edge indices can differ after import into another kernel.
 
 Use the samples below as a starting point for your own Collection. For Rhino geometry conversion and Grasshopper instructions, see the Nuncius guide. [Basic collection](fixtures/geometry-collection-basic.json) · [Mixed BRep collection](fixtures/geometry-collection.json) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Nuncius guide](https://github.com/Avery320/nuncius#readme)
 

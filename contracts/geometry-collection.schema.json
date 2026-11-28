@@ -87,6 +87,7 @@
         },
         {
           "title": "Polyline",
+          "description": "A piecewise linear curve with equal parameter intervals per segment.",
           "required": ["points", "closed"],
           "properties": {
             "kind": { "const": "polyline" },
@@ -119,6 +120,7 @@
         },
         {
           "title": "Mesh",
+          "description": "Vertex positions and triangle indices. The collection carries no normals, UVs, colors, or polygon groups.",
           "required": ["positions", "triangles"],
           "properties": {
             "kind": { "const": "triangle-mesh" },

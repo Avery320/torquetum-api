@@ -4,7 +4,7 @@
 
 Torquetum 的本機 HTTP API 提供專案配對、狀態查詢和 Asterism 幾何交換。本儲存庫包含 V0.0 的 OpenAPI 契約、Geometry Collection 的 JSON Schema，以及 Torquetum 用來提供 API 的 Rust 與 TypeScript 實作。外部程式透過 HTTP 連線至執行中的 Torquetum 專案。 [OpenAPI 契約](contracts/openapi.yaml) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Grasshopper 外掛 Nuncius](https://github.com/Avery320/nuncius)
 
-外部程式使用自己的幾何來源和 HTTP 客戶端。將來源幾何轉成 Geometry Collection，並用配對取得的授權送到指定的 Asterism Input ID。Torquetum 會驗證、更新 Input、求解下游節點，並提供 Output 給外部程式讀取。下載此儲存庫可取得規格、JSON 樣本和可執行的 Python 範例。 [幾何格式](#幾何格式)
+外部程式將來源幾何轉成 Geometry Collection，並用配對取得的授權寫入 Asterism Input ID。Torquetum 驗證後暫存資料。按 **Read** 才會套用 Input，按 **Send** 才會發布 Output 供外部程式讀取。 [幾何格式](#幾何格式)
 
 ## API 一覽
 
@@ -90,7 +90,7 @@ curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
      --data-binary @fixtures/geometry-collection-basic.json
    ```
 
-3. **確認寫入。** `202 Accepted` 表示已受理。將 `tor_receipt` 設為回應標頭 `Location` 的完整相對路徑，使用原本的授權查回執。`pending` 時依 `Retry-After` 所示秒數再查。`committed` 表示 Input 已有一份待讀資料，`result.etag` 是新版本。`rejected` 時查看 `result.error`，幾何驗證錯誤可能包含 `path`、`itemIndex` 和 `field`。
+3. **確認寫入。** `202 Accepted` 表示已受理。將 `tor_receipt` 設為回應標頭 `Location` 的完整相對路徑，使用原本的授權查回執。`pending` 時依 `Retry-After` 所示秒數再查。`committed` 表示整份 Collection 已暫存，`result.etag` 是新版本。`rejected` 時查看 `result.error`，幾何驗證錯誤可能包含 `reason`、`path`、`itemIndex` 和 `field`。
 
    ```sh
    tor_receipt='/v0.0/requests/<requestId>'
@@ -100,7 +100,7 @@ curl --noproxy '*' -sS "$tor_endpoint/v0.0/project" \
 
 將樣本 JSON 換成自己產生的 Collection，並在請求路徑填入要寫入的 Input ID。寫入結果未明時，保留原本的授權、UUID、網址、標頭和 JSON 內容，只重跑 `PUT` 的 `curl` 命令。收到 `412 STALE_REVISION` 時，先重新查 Input 的 ETag，再確認是否要用新 UUID 重新寫入。
 
-同一 ID 的下一次寫入會替換最新的待讀資料。按 **Read** 前，下游仍使用上一次讀取的結果。更改 ID、刪除節點或關閉專案會清除對應的暫存。用 **Bake** 或 **Bake Geometry Tree** 將結果存成 Station 物件。
+同一 ID 只在整份 Collection 驗證並寫入成功後替換待讀資料。按 **Read** 前，下游仍使用上一次讀取的結果。更改 ID、刪除節點或關閉專案會清除對應的暫存。用 **Bake** 或 **Bake Geometry Tree** 將結果存成 Station 物件。
 
 ## 讀取幾何
 
@@ -131,15 +131,16 @@ python3 examples/python/asterism-exchange-smoke.py source result
 | --- | --- | --- |
 | 點（Point） | `point` | `position` 是 XYZ 座標 `[x, y, z]`。 |
 | 直線（Curve） | `line` | `start` 和 `end` 是相異的 XYZ 座標。選填嚴格遞增的參數範圍 `domain: [t0, t1]`，預設為 `[0, 1]`。 |
-| 折線（Curve） | `polyline` | `points` 為依序排列的 XYZ 座標，`closed` 為布林值。相鄰點須相異，開放折線至少兩點，閉合折線至少三個相異點且省略重複的閉合端點。選填嚴格遞增的 `domain: [t0, t1]`，預設從 0 到線段數。 |
+| 折線（Curve） | `polyline` | `points` 為依序排列的 XYZ 座標，`closed` 為布林值。相鄰點須相異，開放折線至少兩點，閉合折線至少三個相異點且省略重複的閉合端點。選填嚴格遞增的 `domain: [t0, t1]`，預設從 0 到線段數。各線段平分參數範圍，並在各自的區間內線性插值。 |
 | 平面（Plane） | `plane` | `origin` 為 XYZ 座標，`normal` 為法向量，`direction` 為 X 軸的參考方向。兩向量須非零且不平行。 |
 | 方體（Box） | `box` | `plane` 包含 `origin`、`normal`、`direction`。在該平面所定的座標系下，以 `x`、`y`、`z` 各自填入嚴格遞增的 `[min, max]` 尺寸範圍。 |
 | 網格（Mesh） | `triangle-mesh` | `positions` 至少有三個 XYZ 頂點，`triangles` 至少有一個三角面。每個面用三個從 0 起算的有效頂點索引，面積必須大於零。 |
 | 曲面與 BRep | `brep-step` | `shapeType` 填單一面 `face`、殼 `shell` 或實體 `solid`。`step` 提供一個連通形狀的完整 STEP Part 21 文字。 |
 
-- 曲線目前可交換直線與折線。獨立圓、圓弧及一般 NURBS 曲線尚無對應的交換型別。
-- 網格傳輸頂點和三角面。來源有四邊面或多邊面時，先轉為三角面再填索引。
-- BRep 接收端會核對 `shapeType` 與形狀相符，並使用 STEP 內宣告的單位。Torquetum 保留精確 CAD 形狀，再產生用於顯示的網格。
+外部軟體的轉接程式負責將來源幾何轉成上表的表示。精確曲線轉換需保留形狀、閉合狀態和參數。獨立的圓、圓弧、橢圓和一般 NURBS 曲線，以及 SubD、圖塊實例和點雲，沒有專用的 `kind`。若使用者接受近似，可先在來源端指定容差，把曲線轉成折線或把曲面轉成三角網格。
+
+- 網格來源有四邊面或多邊面時，先三角化。法向量、UV、頂點顏色及多邊面分組不在交換資料中。
+- 多個不連通的 BRep 可各自放入同一份 Collection。接收端核對 `shapeType` 並使用 STEP 宣告的單位。Torquetum 以 CAD 形狀進行運算，並另產生顯示網格。兩個核心匯入後的面和邊索引可能不同。
 
 可沿用下列樣本建立自己的 Collection。Grasshopper 操作與 Rhino 幾何轉換請參照 Nuncius 使用說明。 [基本 Collection](fixtures/geometry-collection-basic.json) · [混合 BRep Collection](fixtures/geometry-collection.json) · [Geometry Collection Schema](contracts/geometry-collection.schema.json) · [Nuncius 使用說明](https://github.com/Avery320/nuncius#readme)
 
